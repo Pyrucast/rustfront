@@ -96,7 +96,14 @@ fn elasticity_describes_itself() {
     let d = behaviour.description();
     assert_eq!(d.name, "Elasticity");
     assert_eq!(d.hypothesis, Hypothesis::Tridimensional);
-    assert_eq!(d.tfel_version, "5.1.0");
+    // The version of the `mfront` that compiled the library: `Version : 5.1.0`.
+    let output = Command::new("mfront").arg("--version").output().unwrap();
+    let version = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        version.contains(&format!("Version : {}", d.tfel_version)),
+        "{} is not the version of mfront: {version}",
+        d.tfel_version
+    );
     assert_eq!(d.symmetry, Symmetry::Isotropic);
     let names =
         |v: &rustfront::Variables| v.list.iter().map(|v| v.name.clone()).collect::<Vec<_>>();

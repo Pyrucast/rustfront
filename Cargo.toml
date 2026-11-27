@@ -13,6 +13,8 @@ readme = "README.md"
 description = "Evaluate MFront material behaviours (constitutive laws) at a material point, in pure Rust, without MGIS or any C++ build dependency"
 keywords = ["mfront", "tfel", "mechanics", "material", "fem"]
 categories = ["science", "simulation", "api-bindings"]
+# Tooling of the repository, of no use in the published crate.
+exclude = [".github/", "scripts/"]
 
 [lints]
 workspace = true
