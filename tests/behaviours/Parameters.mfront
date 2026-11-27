@@ -1,0 +1,23 @@
+@DSL IsotropicMisesCreep;
+@Behaviour Parameters;
+@Author rustfront contributors;
+@Description {
+  A linear creep law written for the tests of rustfront, to check its
+  settings: the real parameter A, the array of parameters b (whose sum is
+  3 by default), the unsigned short parameter iterMax that the DSL adds,
+  and the bounds of the temperature for the out of bounds policy.
+  dp/dt = A (b[0] + b[1]) / 3 seq: elastic when A is zero.
+}
+
+@Epsilon 1.e-14;
+
+@Parameter real A = 0;
+@Parameter real b[2] = {1, 2};
+
+@Bounds T in [200:400];
+
+@FlowRule {
+  const auto c = A * (b[0] + b[1]) / 3;
+  f = c * seq;
+  df_dseq = c;
+}

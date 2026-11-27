@@ -47,6 +47,8 @@ are given and written multiplied by √2 (TFEL's convention).
 | `@ExternalStateVariable[<evolution\|function>]` | scalars |
 | `@ImposedStrain`, `@ImposedStress` `[<evolution\|function>]` | components `EXX`…`EYZ`, `ERR EZZ ETT ERZ`, `S…` |
 | `@InternalStateVariable` | initial value, `0` or `{…}` |
+| `@Parameter`, `@IntegerParameter`, `@UnsignedIntegerParameter` | set when loading the behaviour, `b[0]` for an element of an array |
+| `@OutOfBoundsPolicy` | `'None'`, `'Warning'` or `'Strict'` |
 | `@Times` | `{0, 1 in 10, 2}` |
 | `@Real` | a value or an expression, usable in functions |
 | `@OutputFile`, `@OutputFilePrecision` | 6 digits by default |

@@ -3,7 +3,7 @@
 use core::fmt;
 use std::path::PathBuf;
 
-use crate::Hypothesis;
+use crate::{Hypothesis, ParameterValue};
 
 /// Everything that can go wrong when loading or integrating a behaviour.
 #[derive(Debug)]
@@ -83,6 +83,26 @@ pub enum Error {
     },
     /// The string is not the name of a modelling hypothesis.
     UnknownHypothesis(String),
+    /// [`crate::Settings`] names a parameter the behaviour does not declare.
+    UnknownParameter {
+        /// The behaviour.
+        behaviour: String,
+        /// The unknown parameter.
+        parameter: String,
+    },
+    /// [`crate::Settings`] gives a parameter a value of another type.
+    WrongParameterType {
+        /// The parameter.
+        parameter: String,
+        /// Its default value, of the expected type.
+        expected: ParameterValue,
+    },
+    /// The behaviour refused the value of a parameter; the library printed
+    /// why on the standard error.
+    ParameterRejected {
+        /// The parameter.
+        parameter: String,
+    },
     /// An array given to [`crate::Behaviour::integrate`] does not have the
     /// length the behaviour expects.
     WrongLength {
@@ -161,6 +181,25 @@ impl fmt::Display for Error {
             Error::UnknownHypothesis(name) => {
                 write!(f, "`{name}` is not a modelling hypothesis")
             }
+            Error::UnknownParameter {
+                behaviour,
+                parameter,
+            } => write!(f, "`{behaviour}` has no parameter `{parameter}`"),
+            Error::WrongParameterType {
+                parameter,
+                expected,
+            } => {
+                let kind = match expected {
+                    ParameterValue::Real(_) => "real",
+                    ParameterValue::Integer(_) => "integer",
+                    ParameterValue::UnsignedShort(_) => "unsigned short",
+                };
+                write!(f, "the parameter `{parameter}` is {kind}")
+            }
+            Error::ParameterRejected { parameter } => write!(
+                f,
+                "the behaviour refused the value of `{parameter}` (see the standard error)"
+            ),
             Error::WrongLength {
                 array,
                 expected,

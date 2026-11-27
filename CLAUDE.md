@@ -64,3 +64,8 @@ once, and check the exit code.
 See "Releasing" in `README.md`: change the two version lines of `Cargo.toml`,
 commit, push a tag `vX.Y.Z`; `.github/workflows/release.yml` publishes both
 crates through crates.io's Trusted Publishing.
+
+`Cargo.toml` carries the version of the next release: right after a release,
+move to the next version. Otherwise `check.sh package` verifies `mtest-rs`
+against the `rustfront` already published under that number, not against the
+code of the repository.

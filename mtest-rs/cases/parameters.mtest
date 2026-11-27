@@ -1,0 +1,14 @@
+// The Parameters test behaviour with settings: a real parameter, an element
+// of an array of parameters, the unsigned short parameter iterMax, and the
+// strict out of bounds policy, the temperature staying within its bounds.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'Parameters';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+@Parameter 'A' 1e-11;
+@Parameter 'b[0]' 4;
+@UnsignedIntegerParameter 'iterMax' 50;
+@OutOfBoundsPolicy 'Strict';
+@ExternalStateVariable 'Temperature' {0:293.15, 10:380};
+@ImposedStrain 'EXX' {0:0, 1:1e-3};
+@Times {0, 1 in 5, 10 in 9};

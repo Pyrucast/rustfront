@@ -60,3 +60,16 @@ pub(crate) const ERROR_MESSAGE_SIZE: usize = 512;
 /// failure. The generated code catches every C++ exception: nothing unwinds
 /// across this boundary.
 pub(crate) type IntegrateFn = unsafe extern "C" fn(*mut BehaviourData) -> c_int;
+
+/// `int <Behaviour>[_<Hypothesis>]_setParameter(const char*, double)`, and
+/// its integer and unsigned short versions: return 1 when the parameter is
+/// set, 0 when refused (the library then prints why on the standard error).
+/// The parameters are static variables of the library.
+pub(crate) type SetParameterFn = unsafe extern "C" fn(*const c_char, f64) -> c_int;
+pub(crate) type SetIntegerParameterFn = unsafe extern "C" fn(*const c_char, c_int) -> c_int;
+pub(crate) type SetUnsignedShortParameterFn = unsafe extern "C" fn(*const c_char, u16) -> c_int;
+
+/// `void <Behaviour>_setOutOfBoundsPolicy(const int)`: 0 None, 1 Warning, 2
+/// Strict. A static variable of the library too; the function does nothing
+/// when the behaviour forbids changing its policy.
+pub(crate) type SetOutOfBoundsPolicyFn = unsafe extern "C" fn(c_int);

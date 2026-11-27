@@ -27,7 +27,7 @@ members = ["mtest-rs"]
 # `vX.Y.Z` (see .github/workflows/release.yml, whose `check-version` job
 # compares the tag with this version and with the one of the dependency below).
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Minimum compiler, set by `libloading` 0.9, which declares 1.88 (edition 2024
 # alone would only need 1.85). Without this line, a user would get a raw error
@@ -41,7 +41,7 @@ repository = "https://github.com/Pyrucast/rustfront"
 # `mtest-rs` depends on `rustfront` by path in the repository, and by version
 # once published: crates.io needs the version, which must follow the one above.
 [workspace.dependencies]
-rustfront = { path = ".", version = "0.1.0" }
+rustfront = { path = ".", version = "0.2.0" }
 
 # Lints added to those clippy already applies, for both packages.
 # `unnecessary_wraps` rejects a `Result` that can never be an error, and an

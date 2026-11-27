@@ -1,6 +1,6 @@
 //! Reading `.mtest` files: the subset of MTest's syntax listed in the README.
 
-use rustfront::Hypothesis;
+use rustfront::{Hypothesis, OutOfBoundsPolicy, ParameterValue};
 
 use crate::expression::Expression;
 
@@ -53,6 +53,10 @@ pub struct Test {
     pub internal_state_variables: Vec<(String, Vec<f64>)>,
     /// What is imposed, on which component (`EXX`, `SXY`, …), how.
     pub imposed: Vec<(Imposed, String, Evolution)>,
+    /// The parameters to set when loading the behaviour.
+    pub parameters: Vec<(String, ParameterValue)>,
+    /// `None` keeps the policy of the behaviour.
+    pub out_of_bounds_policy: Option<OutOfBoundsPolicy>,
     pub times: Vec<f64>,
     /// `None` when the file does not choose: the caller decides.
     pub output_file: Option<String>,
@@ -286,6 +290,8 @@ pub fn parse(source: &str) -> Result<Test, String> {
         external_state_variables: Vec::new(),
         internal_state_variables: Vec::new(),
         imposed: Vec::new(),
+        parameters: Vec::new(),
+        out_of_bounds_policy: None,
         times: Vec::new(),
         output_file: None,
         output_precision: 6,
@@ -422,6 +428,39 @@ pub fn parse(source: &str) -> Result<Test, String> {
                 };
                 constants.push((name, value));
             }
+            "@Parameter" | "@IntegerParameter" | "@UnsignedIntegerParameter" => {
+                let name = tokens.text()?;
+                let value = tokens.number()?;
+                let value = match keyword.as_str() {
+                    "@Parameter" => ParameterValue::Real(value),
+                    _ if value.fract() != 0.0 => {
+                        return Err(format!("line {line}: `{keyword}` expects an integer"));
+                    }
+                    "@IntegerParameter" => {
+                        ParameterValue::Integer(i32::try_from(value as i64).map_err(|_| {
+                            format!("line {line}: {value} is out of the range of an integer")
+                        })?)
+                    }
+                    _ => ParameterValue::UnsignedShort(u16::try_from(value as i64).map_err(
+                        |_| {
+                            format!("line {line}: {value} is out of the range of an unsigned short")
+                        },
+                    )?),
+                };
+                test.parameters.push((name, value));
+            }
+            "@OutOfBoundsPolicy" => {
+                test.out_of_bounds_policy = Some(match tokens.text()?.as_str() {
+                    "None" => OutOfBoundsPolicy::None,
+                    "Warning" => OutOfBoundsPolicy::Warning,
+                    "Strict" => OutOfBoundsPolicy::Strict,
+                    other => {
+                        return Err(format!(
+                            "line {line}: `{other}` is not a policy: None, Warning or Strict"
+                        ));
+                    }
+                });
+            }
             "@OutputFile" => test.output_file = Some(tokens.text()?),
             "@OutputFilePrecision" => test.output_precision = count(&mut tokens)?,
             "@StrainEpsilon" => test.strain_epsilon = tokens.number()?,
@@ -475,7 +514,11 @@ mod tests {
              @ImposedStress 'SYY' -1e6;\n\
              @InternalStateVariable 'ElasticStrain' {{1, 2, 3, 4}};\n\
              @Times {{0, 1 in 4, 3}};\n\
-             @OutputFilePrecision 14;\n"
+             @OutputFilePrecision 14;\n\
+             @Parameter 'epsilon' 1e-12;\n\
+             @UnsignedIntegerParameter 'iterMax' 20;\n\
+             @IntegerParameter 'n' -3;\n\
+             @OutOfBoundsPolicy 'Strict';\n"
         );
         let test = parse(&source).unwrap();
         assert_eq!(test.hypothesis, Hypothesis::PlaneStrain);
@@ -495,6 +538,15 @@ mod tests {
         assert!((exx.value(0.5) - 1e-3).abs() < 1e-18);
         assert_eq!(test.imposed[1].2, Evolution::Constant(-1e6));
         assert_eq!(test.internal_state_variables[0].1, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            test.parameters,
+            [
+                ("epsilon".to_owned(), ParameterValue::Real(1e-12)),
+                ("iterMax".to_owned(), ParameterValue::UnsignedShort(20)),
+                ("n".to_owned(), ParameterValue::Integer(-3)),
+            ]
+        );
+        assert_eq!(test.out_of_bounds_policy, Some(OutOfBoundsPolicy::Strict));
     }
 
     #[test]
@@ -507,6 +559,9 @@ mod tests {
             ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 1};\n@ImposedStrain<function> 'EXX' 'x*t';\n", "line 3: unknown variable `x`"),
             ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 1}\n", "line 2: unexpected end of file"),
             ("@Times {0, 1};\n", "no `@Behaviour` declared"),
+            ("@Behaviour<generic> 'lib' 'b';\n@UnsignedIntegerParameter 'iterMax' 1.5;\n", "line 2: `@UnsignedIntegerParameter` expects an integer"),
+            ("@Behaviour<generic> 'lib' 'b';\n@UnsignedIntegerParameter 'iterMax' -1;\n", "line 2: -1 is out of the range of an unsigned short"),
+            ("@Behaviour<generic> 'lib' 'b';\n@OutOfBoundsPolicy 'Never';\n", "line 2: `Never` is not a policy"),
             ("@Behaviour<generic> 'lib' 'b;\n", "line 1: unterminated string"),
         ] {
             let error = parse(source).unwrap_err();

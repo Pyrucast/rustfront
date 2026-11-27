@@ -2,7 +2,9 @@
 //! components and one Lagrange multiplier per imposed strain, until the
 //! stresses of the free components reach the imposed ones (zero by default).
 
-use rustfront::{Behaviour, FinalState, Hypothesis, InitialState, TangentOperator, VariableType};
+use rustfront::{
+    Behaviour, FinalState, Hypothesis, InitialState, TangentOperator, TimeStep, VariableType,
+};
 
 use crate::input::{Evolution, Imposed, Test};
 
@@ -203,7 +205,12 @@ pub fn run(test: &Test, behaviour: &Behaviour) -> Result<Vec<Vec<f64>>, String> 
                 external_state_variables: &external1,
             };
             let tangent = Some((TangentOperator::ConsistentTangent, k.as_mut_slice()));
-            let integration = match behaviour.integrate(target - t, &s0, &mut s1, tangent) {
+            // As MGIS by default: the behaviour may not propose a larger step.
+            let step = TimeStep {
+                dt: target - t,
+                max_scaling_factor: 1.0,
+            };
+            let integration = match behaviour.integrate(step, &s0, &mut s1, tangent) {
                 Ok(integration) => integration,
                 Err(e) => break Err(e.to_string()),
             };
