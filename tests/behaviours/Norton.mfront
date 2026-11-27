@@ -1,0 +1,23 @@
+@DSL IsotropicMisesCreep;
+@Behaviour Norton;
+@Author rustfront contributors;
+@Description {
+  Norton viscoplastic law, written for the tests of rustfront:
+  the equivalent viscoplastic strain p evolves as dp/dt = A seq^m,
+  seq being the von Mises stress. The DSL adds the elastic strain and
+  p as internal state variables, and the Young modulus and Poisson
+  ratio as material properties.
+}
+
+@Epsilon 1.e-14;
+
+@MaterialProperty real A;
+A.setEntryName("NortonCoefficient");
+@MaterialProperty real m;
+m.setEntryName("NortonExponent");
+
+@FlowRule {
+  const auto tmp = A * pow(seq, m - 1);
+  f = tmp * seq;
+  df_dseq = m * tmp;
+}

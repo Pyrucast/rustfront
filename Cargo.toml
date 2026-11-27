@@ -4,10 +4,10 @@ name = "rustfront"
 # qui intègre réellement une loi.
 version = "0.0.1"
 edition = "2024"
-# Plancher de compilateur : l'edition 2024, stabilisée en 1.85, est la seule
-# exigence à ce jour. Sans cette ligne, un utilisateur recevrait une erreur
-# brute au lieu d'un message qui nomme la version attendue.
-rust-version = "1.85"
+# Plancher de compilateur, fixé par `libloading` 0.9 qui déclare 1.88 (l'edition
+# 2024 n'en demanderait que 1.85). Sans cette ligne, un utilisateur recevrait
+# une erreur brute au lieu d'un message qui nomme la version attendue.
+rust-version = "1.88"
 authors = ["Gauthier F"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Pyrucast/rustfront"
@@ -24,3 +24,8 @@ categories = ["science", "simulation", "api-bindings"]
 # une `Option` toujours `Some`. `clippy.toml` l'étend à l'API publique.
 [lints.clippy]
 unnecessary_wraps = "warn"
+
+# Une seule dépendance : `libloading` ouvre la bibliothèque générée par MFront et
+# y lit les symboles (dlopen/dlsym, LoadLibrary/GetProcAddress sous Windows).
+[dependencies]
+libloading = "0.9"

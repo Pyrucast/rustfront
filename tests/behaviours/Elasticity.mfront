@@ -1,0 +1,29 @@
+@DSL Default;
+@Behaviour Elasticity;
+@Author rustfront contributors;
+@Description {
+  Isotropic linear elasticity, written for the tests of rustfront.
+  The von Mises stress is stored as an auxiliary state variable: being
+  non-linear in the stress, it reveals the storage convention of the
+  shear components, which linear elasticity alone cannot.
+}
+
+@MaterialProperty stress young;
+young.setGlossaryName("YoungModulus");
+@MaterialProperty real nu;
+nu.setGlossaryName("PoissonRatio");
+
+@AuxiliaryStateVariable stress seq;
+seq.setGlossaryName("VonMisesStress");
+
+@ProvidesSymmetricTangentOperator;
+
+@Integrator {
+  const auto lambda = young * nu / ((1 + nu) * (1 - 2 * nu));
+  const auto mu = young / (2 * (1 + nu));
+  sig = lambda * trace(eto + deto) * Stensor::Id() + 2 * mu * (eto + deto);
+  seq = sigmaeq(sig);
+  if (computeTangentOperator_) {
+    Dt = lambda * Stensor4::IxI() + 2 * mu * Stensor4::Id();
+  }
+}
