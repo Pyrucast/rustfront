@@ -1,0 +1,12 @@
+// The Norton test behaviour in plane strain: four components, EZZ is zero,
+// so SZZ builds up while EXX is raised then held.
+@ModellingHypothesis 'PlaneStrain';
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'Norton';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+@MaterialProperty<constant> 'NortonCoefficient' 5e-69;
+@MaterialProperty<constant> 'NortonExponent' 8.2;
+@ExternalStateVariable 'Temperature' 293.15;
+@ImposedStrain 'EXX' {0:0, 1:3e-4};
+@Times {0, 1 in 5, 10 in 10};

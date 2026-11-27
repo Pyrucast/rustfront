@@ -1,0 +1,12 @@
+// Creep of the Norton test behaviour: the stress SXX is imposed, raised to
+// 60 MPa in one second then held, and every strain component is free.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'Norton';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+@MaterialProperty<constant> 'NortonCoefficient' 5e-69;
+@MaterialProperty<constant> 'NortonExponent' 8.2;
+@ExternalStateVariable 'Temperature' 293.15;
+@InternalStateVariable 'EquivalentViscoplasticStrain' 0;
+@ImposedStress 'SXX' {0:0, 1:60e6};
+@Times {0, 1 in 5, 100 in 20};

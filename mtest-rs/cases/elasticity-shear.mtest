@@ -1,0 +1,12 @@
+// Pure shear of the Elasticity test behaviour, imposed through a function of
+// the time. MTest stores the off-diagonal components multiplied by sqrt(2):
+// EXY is sqrt(2) times the tensor component, half the engineering shear.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'Elasticity';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+@ExternalStateVariable 'Temperature' 293.15;
+// The engineering shear strain reached at t = 1.
+@Real 'gamma' 2e-3;
+@ImposedStrain<function> 'EXY' 'sqrt(2)*gamma/2*t';
+@Times {0, 1 in 5};

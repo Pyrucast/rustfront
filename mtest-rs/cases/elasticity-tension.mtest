@@ -1,0 +1,12 @@
+// Uniaxial tension of the Elasticity test behaviour: only EXX is imposed,
+// the other components are free (zero stress), hence the Poisson effect
+// EYY = EZZ = -0.3 EXX, and SXX = E EXX.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'Elasticity';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+// Elasticity does not depend on the temperature: its evolution only checks
+// that external state variables follow the times.
+@ExternalStateVariable 'Temperature' {0:293.15, 1:400};
+@ImposedStrain 'EXX' {0:0, 1:1e-3};
+@Times {0, 1 in 10};

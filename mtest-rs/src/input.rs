@@ -1,0 +1,516 @@
+//! Reading `.mtest` files: the subset of MTest's syntax listed in the README.
+
+use rustfront::Hypothesis;
+
+use crate::expression::Expression;
+
+/// How a value evolves with time.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Evolution {
+    /// The same value at all times.
+    Constant(f64),
+    /// Linear between the `(time, value)` points, sorted by time, and
+    /// constant before the first one and after the last one.
+    Table(Vec<(f64, f64)>),
+    /// An expression of the time.
+    Function(Expression),
+}
+
+impl Evolution {
+    /// The value at the time `t`.
+    pub fn value(&self, t: f64) -> f64 {
+        match self {
+            Evolution::Constant(value) => *value,
+            Evolution::Table(points) => match points.iter().position(|(time, _)| *time > t) {
+                Some(0) => points[0].1,
+                None => points[points.len() - 1].1,
+                Some(i) => {
+                    let ((t0, v0), (t1, v1)) = (points[i - 1], points[i]);
+                    v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+                }
+            },
+            Evolution::Function(expression) => expression.value(t),
+        }
+    }
+}
+
+/// What a loading imposes on a component.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Imposed {
+    Strain,
+    Stress,
+}
+
+/// A test read from a `.mtest` file.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Test {
+    pub hypothesis: Hypothesis,
+    pub library: String,
+    pub behaviour: String,
+    pub material_properties: Vec<(String, Evolution)>,
+    pub external_state_variables: Vec<(String, Evolution)>,
+    /// Initial values, all the components of each variable.
+    pub internal_state_variables: Vec<(String, Vec<f64>)>,
+    /// What is imposed, on which component (`EXX`, `SXY`, …), how.
+    pub imposed: Vec<(Imposed, String, Evolution)>,
+    pub times: Vec<f64>,
+    /// `None` when the file does not choose: the caller decides.
+    pub output_file: Option<String>,
+    pub output_precision: usize,
+    pub strain_epsilon: f64,
+    pub stress_epsilon: f64,
+    pub maximum_iterations: usize,
+    pub maximum_sub_steps: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Token {
+    /// `@Behaviour`, …
+    Keyword(String),
+    /// `'…'` or `"…"`.
+    Text(String),
+    Number(f64),
+    /// `in`, `generic`, …
+    Word(String),
+    Symbol(char),
+}
+
+/// The tokens of the file, with their line, and the position of the next one.
+struct Tokens {
+    list: Vec<(Token, usize)>,
+    position: usize,
+}
+
+impl Tokens {
+    /// The next token and its line.
+    fn next(&mut self) -> Result<(Token, usize), String> {
+        let last_line = self.list.last().map_or(1, |(_, line)| *line);
+        let token = self
+            .list
+            .get(self.position)
+            .cloned()
+            .ok_or_else(|| format!("line {last_line}: unexpected end of file"))?;
+        self.position += 1;
+        Ok(token)
+    }
+
+    /// Consumes the next token if it is `expected`.
+    fn next_if(&mut self, expected: &Token) -> bool {
+        let found = self
+            .list
+            .get(self.position)
+            .is_some_and(|(t, _)| t == expected);
+        if found {
+            self.position += 1;
+        }
+        found
+    }
+
+    fn text(&mut self) -> Result<String, String> {
+        match self.next()? {
+            (Token::Text(text), _) => Ok(text),
+            (token, line) => Err(format!(
+                "line {line}: expected a quoted string, found {token:?}"
+            )),
+        }
+    }
+
+    fn number(&mut self) -> Result<f64, String> {
+        match self.next()? {
+            (Token::Number(value), _) => Ok(value),
+            (token, line) => Err(format!("line {line}: expected a number, found {token:?}")),
+        }
+    }
+
+    fn symbol(&mut self, expected: char) -> Result<(), String> {
+        match self.next()? {
+            (Token::Symbol(c), _) if c == expected => Ok(()),
+            (token, line) => Err(format!(
+                "line {line}: expected `{expected}`, found {token:?}"
+            )),
+        }
+    }
+
+    /// A number, a table `{t:v, …}`, or with the `function` option an
+    /// expression of `t`.
+    fn evolution(
+        &mut self,
+        option: Option<&str>,
+        constants: &[(String, f64)],
+    ) -> Result<Evolution, String> {
+        match (option, self.next()?) {
+            (Some("function"), (Token::Text(text), line)) => Expression::parse(&text, constants)
+                .map(Evolution::Function)
+                .map_err(|e| format!("line {line}: {e}")),
+            (None | Some("evolution" | "constant"), (Token::Number(value), _)) => {
+                Ok(Evolution::Constant(value))
+            }
+            (None | Some("evolution"), (Token::Symbol('{'), line)) => {
+                let mut points: Vec<(f64, f64)> = Vec::new();
+                loop {
+                    let t = self.number()?;
+                    self.symbol(':')?;
+                    let value = self.number()?;
+                    if points.last().is_some_and(|(last, _)| *last >= t) {
+                        return Err(format!(
+                            "line {line}: the times of an evolution must increase"
+                        ));
+                    }
+                    points.push((t, value));
+                    if !self.next_if(&Token::Symbol(',')) {
+                        break;
+                    }
+                }
+                self.symbol('}')?;
+                Ok(Evolution::Table(points))
+            }
+            (option, (token, line)) => Err(format!(
+                "line {line}: {token:?} is not an evolution{}",
+                option
+                    .map(|o| format!(" of type `{o}`"))
+                    .unwrap_or_default()
+            )),
+        }
+    }
+}
+
+/// Reads the text of a `.mtest` file.
+pub fn parse(source: &str) -> Result<Test, String> {
+    // Tokens, with their line.
+    let chars: Vec<char> = source.chars().collect();
+    let mut list = Vec::new();
+    let mut line = 1;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        if c == '\n' {
+            line += 1;
+            i += 1;
+        } else if c.is_whitespace() {
+            i += 1;
+        } else if c == '/' && next == Some('/') {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            i += 2;
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                line += usize::from(chars[i] == '\n');
+                i += 1;
+            }
+            if i + 1 >= chars.len() {
+                return Err(format!("line {line}: unterminated comment"));
+            }
+            i += 2;
+        } else if c == '\'' || c == '"' {
+            let start = i + 1;
+            i = start;
+            while i < chars.len() && chars[i] != c && chars[i] != '\n' {
+                i += 1;
+            }
+            if chars.get(i) != Some(&c) {
+                return Err(format!("line {line}: unterminated string"));
+            }
+            list.push((Token::Text(chars[start..i].iter().collect()), line));
+            i += 1;
+        } else if c.is_ascii_digit()
+            || c == '.'
+            || ((c == '-' || c == '+') && next.is_some_and(|n| n.is_ascii_digit() || n == '.'))
+        {
+            // A sign, digits and dots, then an exponent: `-1.e-3`, `150e9`.
+            let start = i;
+            i += usize::from(c == '-' || c == '+');
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                i += 1;
+            }
+            if i < chars.len() && (chars[i] == 'e' || chars[i] == 'E') {
+                let sign = usize::from(chars.get(i + 1).is_some_and(|s| *s == '+' || *s == '-'));
+                if chars.get(i + 1 + sign).is_some_and(char::is_ascii_digit) {
+                    i += 1 + sign;
+                    while i < chars.len() && chars[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
+            }
+            let number: String = chars[start..i].iter().collect();
+            let value = number
+                .parse()
+                .map_err(|_| format!("line {line}: `{number}` is not a number"))?;
+            list.push((Token::Number(value), line));
+        } else if c == '@' || c.is_alphabetic() || c == '_' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            if word == "@Description" {
+                // Free text between braces, skipped here: `@Description { … }`.
+                while i < chars.len() && chars[i] != '{' {
+                    line += usize::from(chars[i] == '\n');
+                    i += 1;
+                }
+                let mut depth = 0;
+                while i < chars.len() {
+                    depth += i32::from(chars[i] == '{') - i32::from(chars[i] == '}');
+                    line += usize::from(chars[i] == '\n');
+                    i += 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                if depth != 0 {
+                    return Err(format!("line {line}: unterminated `@Description`"));
+                }
+            } else if c == '@' {
+                list.push((Token::Keyword(word), line));
+            } else {
+                list.push((Token::Word(word), line));
+            }
+        } else if "{}:,;<>".contains(c) {
+            list.push((Token::Symbol(c), line));
+            i += 1;
+        } else {
+            return Err(format!("line {line}: unexpected character `{c}`"));
+        }
+    }
+
+    // Keywords.
+    let mut tokens = Tokens { list, position: 0 };
+    let mut test = Test {
+        hypothesis: Hypothesis::Tridimensional,
+        library: String::new(),
+        behaviour: String::new(),
+        material_properties: Vec::new(),
+        external_state_variables: Vec::new(),
+        internal_state_variables: Vec::new(),
+        imposed: Vec::new(),
+        times: Vec::new(),
+        output_file: None,
+        output_precision: 6,
+        strain_epsilon: 1e-12,
+        stress_epsilon: 1e-3,
+        maximum_iterations: 100,
+        maximum_sub_steps: 10,
+    };
+    // The values declared by `@Real`, usable in the expressions.
+    let mut constants: Vec<(String, f64)> = Vec::new();
+    while tokens.position < tokens.list.len() {
+        let (keyword, line) = match tokens.next()? {
+            (Token::Keyword(keyword), line) => (keyword, line),
+            // The semicolon left after a skipped `@Description { … };`.
+            (Token::Symbol(';'), _) => continue,
+            (token, line) => {
+                return Err(format!("line {line}: expected a keyword, found {token:?}"))
+            }
+        };
+        let option = if tokens.next_if(&Token::Symbol('<')) {
+            let option = match tokens.next()? {
+                (Token::Word(word), _) => word,
+                (token, line) => {
+                    return Err(format!("line {line}: expected an option, found {token:?}"))
+                }
+            };
+            tokens.symbol('>')?;
+            Some(option)
+        } else {
+            None
+        };
+        let with_option = [
+            "@Behaviour",
+            "@MaterialProperty",
+            "@ExternalStateVariable",
+            "@ImposedStrain",
+            "@ImposedStress",
+        ];
+        if option.is_some() && !with_option.contains(&keyword.as_str()) {
+            return Err(format!("line {line}: `{keyword}` takes no option"));
+        }
+        // An integer parameter: a whole positive number.
+        let count = |tokens: &mut Tokens| -> Result<usize, String> {
+            let value = tokens.number()?;
+            if value < 1.0 || value.fract() != 0.0 {
+                return Err(format!(
+                    "line {line}: `{keyword}` expects a positive integer"
+                ));
+            }
+            Ok(value as usize)
+        };
+        match keyword.as_str() {
+            "@ModellingHypothesis" => {
+                test.hypothesis = tokens
+                    .text()?
+                    .parse()
+                    .map_err(|e: rustfront::Error| format!("line {line}: {e}"))?;
+            }
+            "@Behaviour" => {
+                if option.as_deref() != Some("generic") {
+                    return Err(format!(
+                        "line {line}: only behaviours of the generic interface are supported \
+                         (`@Behaviour<generic> 'library' 'behaviour';`)"
+                    ));
+                }
+                test.library = tokens.text()?;
+                test.behaviour = tokens.text()?;
+            }
+            "@MaterialProperty" | "@ExternalStateVariable" => {
+                let name = tokens.text()?;
+                let evolution = tokens.evolution(option.as_deref(), &constants)?;
+                if keyword == "@MaterialProperty" {
+                    test.material_properties.push((name, evolution));
+                } else {
+                    test.external_state_variables.push((name, evolution));
+                }
+            }
+            "@ImposedStrain" | "@ImposedStress" => {
+                let component = tokens.text()?;
+                let evolution = tokens.evolution(option.as_deref(), &constants)?;
+                let imposed = if keyword == "@ImposedStrain" {
+                    Imposed::Strain
+                } else {
+                    Imposed::Stress
+                };
+                test.imposed.push((imposed, component, evolution));
+            }
+            "@InternalStateVariable" => {
+                let name = tokens.text()?;
+                let mut values = Vec::new();
+                if tokens.next_if(&Token::Symbol('{')) {
+                    loop {
+                        values.push(tokens.number()?);
+                        if !tokens.next_if(&Token::Symbol(',')) {
+                            break;
+                        }
+                    }
+                    tokens.symbol('}')?;
+                } else {
+                    values.push(tokens.number()?);
+                }
+                test.internal_state_variables.push((name, values));
+            }
+            "@Times" => {
+                // `{t0, t1 in n, t2}`: `in n` splits an interval in n steps.
+                tokens.symbol('{')?;
+                test.times = vec![tokens.number()?];
+                while tokens.next_if(&Token::Symbol(',')) {
+                    let t = tokens.number()?;
+                    let steps = if tokens.next_if(&Token::Word("in".to_owned())) {
+                        count(&mut tokens)?
+                    } else {
+                        1
+                    };
+                    let t0 = test.times[test.times.len() - 1];
+                    if t <= t0 {
+                        return Err(format!("line {line}: the times must increase"));
+                    }
+                    test.times
+                        .extend((1..=steps).map(|k| t0 + (t - t0) * k as f64 / steps as f64));
+                }
+                tokens.symbol('}')?;
+            }
+            "@Real" => {
+                let name = tokens.text()?;
+                let value = match tokens.next()? {
+                    (Token::Number(value), _) => value,
+                    (Token::Text(text), line) => Expression::parse(&text, &constants)
+                        .map_err(|e| format!("line {line}: {e}"))?
+                        .value(0.0),
+                    (token, line) => {
+                        return Err(format!("line {line}: expected a value, found {token:?}"))
+                    }
+                };
+                constants.push((name, value));
+            }
+            "@OutputFile" => test.output_file = Some(tokens.text()?),
+            "@OutputFilePrecision" => test.output_precision = count(&mut tokens)?,
+            "@StrainEpsilon" => test.strain_epsilon = tokens.number()?,
+            "@StressEpsilon" => test.stress_epsilon = tokens.number()?,
+            "@MaximumNumberOfIterations" => test.maximum_iterations = count(&mut tokens)?,
+            "@MaximumNumberOfSubSteps" => test.maximum_sub_steps = count(&mut tokens)?,
+            "@Author" | "@Date" => {
+                // Free text up to the semicolon.
+                while !tokens.next_if(&Token::Symbol(';')) {
+                    tokens.next()?;
+                }
+                continue;
+            }
+            _ => {
+                return Err(format!(
+                    "line {line}: unknown or unsupported keyword `{keyword}`"
+                ))
+            }
+        }
+        tokens.symbol(';')?;
+    }
+    if test.behaviour.is_empty() {
+        return Err("no `@Behaviour` declared".to_owned());
+    }
+    if test.times.len() < 2 {
+        return Err("`@Times` must give at least two times".to_owned());
+    }
+    Ok(test)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEADER: &str = "@Behaviour<generic> 'src/libBehaviour.so' 'Norton';\n";
+
+    #[test]
+    fn a_complete_file_is_read() {
+        let source = format!(
+            "{HEADER}\
+             /* a block\n comment */\n\
+             @Author Someone Else;\n\
+             @Description {{ any text: (p), 1.2 {{nested}} }}\n\
+             @ModellingHypothesis 'PlaneStrain'; // a line comment\n\
+             @Real 'e0' 1.e-3;\n\
+             @Real 'e1' '2*e0';\n\
+             @MaterialProperty<constant> 'YoungModulus' 150e9;\n\
+             @MaterialProperty<function> 'PoissonRatio' '0.3+0*t';\n\
+             @ExternalStateVariable 'Temperature' {{0:293.15, 1:400}};\n\
+             @ImposedStrain<function> 'EXX' 'e1*t';\n\
+             @ImposedStress 'SYY' -1e6;\n\
+             @InternalStateVariable 'ElasticStrain' {{1, 2, 3, 4}};\n\
+             @Times {{0, 1 in 4, 3}};\n\
+             @OutputFilePrecision 14;\n"
+        );
+        let test = parse(&source).unwrap();
+        assert_eq!(test.hypothesis, Hypothesis::PlaneStrain);
+        assert_eq!(
+            (test.library.as_str(), test.behaviour.as_str()),
+            ("src/libBehaviour.so", "Norton")
+        );
+        assert_eq!(test.times, [0.0, 0.25, 0.5, 0.75, 1.0, 3.0]);
+        assert_eq!(test.output_precision, 14);
+        assert_eq!(test.material_properties[1].1.value(5.0), 0.3);
+        let temperature = &test.external_state_variables[0].1;
+        assert_eq!(temperature.value(-1.0), 293.15);
+        assert!((temperature.value(0.5) - (293.15 + 400.0) / 2.0).abs() < 1e-12);
+        assert_eq!(temperature.value(2.0), 400.0);
+        let (kind, component, exx) = &test.imposed[0];
+        assert_eq!((*kind, component.as_str()), (Imposed::Strain, "EXX"));
+        assert!((exx.value(0.5) - 1e-3).abs() < 1e-18);
+        assert_eq!(test.imposed[1].2, Evolution::Constant(-1e6));
+        assert_eq!(test.internal_state_variables[0].1, [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn mistakes_are_reported_with_their_line() {
+        for (source, message) in [
+            ("@Behaviour<aster> 'lib' 'b';\n", "line 1: only behaviours of the generic"),
+            ("@Behaviour<generic> 'lib' 'b';\n@Foo 1;\n", "line 2: unknown or unsupported keyword `@Foo`"),
+            ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 1 in 0};\n", "line 2: `@Times` expects a positive integer"),
+            ("@Behaviour<generic> 'lib' 'b';\n\n@Times {1, 0};\n", "line 3: the times must increase"),
+            ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 1};\n@ImposedStrain<function> 'EXX' 'x*t';\n", "line 3: unknown variable `x`"),
+            ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 1}\n", "line 2: unexpected end of file"),
+            ("@Times {0, 1};\n", "no `@Behaviour` declared"),
+            ("@Behaviour<generic> 'lib' 'b;\n", "line 1: unterminated string"),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(error.contains(message), "{source:?}: {error}");
+        }
+    }
+}
