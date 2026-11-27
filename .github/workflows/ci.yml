@@ -78,15 +78,7 @@ jobs:
           key: tfel-${{ env.TFEL_VERSION }}-${{ steps.image.outputs.os }}-${{ runner.arch }}
       - name: Build TFEL
         if: steps.tfel.outputs.cache-hit != 'true'
-        run: |
-          git clone --quiet --depth 1 --branch "TFEL-$TFEL_VERSION" \
-            https://github.com/thelfer/tfel.git "$RUNNER_TEMP/tfel"
-          cmake -S "$RUNNER_TEMP/tfel" -B "$RUNNER_TEMP/tfel-build" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$HOME/tfel-$TFEL_VERSION" \
-            -Denable-testing=OFF -Denable-website=OFF -Denable-mfront-quantity-tests=OFF
-          cmake --build "$RUNNER_TEMP/tfel-build" --parallel "$(nproc)"
-          cmake --install "$RUNNER_TEMP/tfel-build"
+        run: ./scripts/install-tfel.sh "$TFEL_VERSION" "$HOME/tfel-$TFEL_VERSION"
       - name: Put TFEL in the PATH
         run: |
           echo "$HOME/tfel-$TFEL_VERSION/bin" >> "$GITHUB_PATH"
@@ -94,23 +86,20 @@ jobs:
       - name: TFEL version
         run: mfront --version
 
-      # One step per check, so that the interface shows which one fails.
+      # The checks of scripts/check.sh, which runs them locally too: one step
+      # per check, so that the interface shows which one fails.
       - name: Formatting
-        run: cargo fmt --all --check
+        run: ./scripts/check.sh fmt
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: ./scripts/check.sh clippy
       - name: Tests
-        run: cargo test --workspace
+        run: ./scripts/check.sh test
       - name: Documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps
+        run: ./scripts/check.sh doc
       - name: Comparison of mtest-rs with MTest
-        run: ./scripts/try.sh
-      # Packages both crates and compiles them as crates.io will, mtest-rs
-      # against the packaged rustfront.
+        run: ./scripts/check.sh compare
       - name: Packaging
-        run: cargo publish --workspace --dry-run
+        run: ./scripts/check.sh package
 
   msrv:
     name: Minimum Rust version
@@ -119,6 +108,13 @@ jobs:
       - uses: actions/checkout@v7
       # The `rust-version` declared in Cargo.toml: building with it is the
       # only way to know it still holds. No TFEL needed: nothing runs.
-      - uses: dtolnay/rust-toolchain@1.88
+      - name: Minimum Rust version of Cargo.toml
+        id: msrv
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-targets
+      - run: ./scripts/check.sh msrv

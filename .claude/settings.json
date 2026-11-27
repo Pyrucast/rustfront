@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo clippy --workspace --all-targets -- -D warnings)",
+      "Bash(cargo clippy --all-targets -- -D warnings)",
+      "Bash(gh search *)",
+      "Bash(cargo fmt --check)",
+      "Bash(mfront --version)",
+      "Bash(cargo fmt --all --check)",
+      "Bash(cargo test --workspace)",
+      "Bash(gh run watch *)",
+      "Bash(./scripts/check.sh *)"
+    ]
+  }
+}

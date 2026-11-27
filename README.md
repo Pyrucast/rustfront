@@ -29,7 +29,9 @@ Only loading a library is `unsafe`; integrating is safe.
   interface: `mfront --obuild --interface=generic Norton.mfront`.
 - Rust 1.88 or later.
 - To run the tests, `mfront` in the `PATH`: the tests compile the behaviours
-  of `tests/behaviours` and fail without it.
+  of `tests/behaviours` and fail without it. `./scripts/check.sh` runs every
+  check of the CI, and `./scripts/install-tfel.sh <version> <prefix>` builds
+  and installs a TFEL version.
 
 ## Try it
 

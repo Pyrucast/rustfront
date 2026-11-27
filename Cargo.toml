@@ -14,7 +14,7 @@ description = "Evaluate MFront material behaviours (constitutive laws) at a mate
 keywords = ["mfront", "tfel", "mechanics", "material", "fem"]
 categories = ["science", "simulation", "api-bindings"]
 # Tooling of the repository, of no use in the published crate.
-exclude = [".github/", "scripts/"]
+exclude = [".claude/", ".github/", "scripts/", "CLAUDE.md"]
 
 [lints]
 workspace = true
