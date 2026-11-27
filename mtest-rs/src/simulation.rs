@@ -1,6 +1,6 @@
-//! The time loop: at each step, Newton iterations on the strain components
-//! that are not imposed, until their stresses reach the imposed ones (zero by
-//! default).
+//! The time loop, MTest's: at each step, Newton iterations on the strain
+//! components and one Lagrange multiplier per imposed strain, until the
+//! stresses of the free components reach the imposed ones (zero by default).
 
 use rustfront::{Behaviour, FinalState, Hypothesis, InitialState, TangentOperator, VariableType};
 
@@ -94,13 +94,11 @@ pub fn run(test: &Test, behaviour: &Behaviour) -> Result<Vec<Vec<f64>>, String> 
         isv0[v.offset..v.offset + v.size].copy_from_slice(given);
     }
 
-    // What is imposed on each component. In plane strain, `EZZ` is zero.
+    // The constraints, in MTest's order: those of the file, then those the
+    // hypothesis adds. Each imposed strain has a Lagrange multiplier, stored
+    // after the strain components among the unknowns.
     let zero = Evolution::Constant(0.0);
-    let mut imposed_strain: Vec<Option<&Evolution>> = vec![None; n];
-    let mut imposed_stress: Vec<Option<&Evolution>> = vec![None; n];
-    if test.hypothesis == Hypothesis::PlaneStrain {
-        imposed_strain[2] = Some(&zero);
-    }
+    let mut constraints: Vec<(Imposed, usize, &Evolution)> = Vec::new();
     let suffixes = stensor_suffixes(test.hypothesis);
     for (kind, component, evolution) in &test.imposed {
         let prefix = match kind {
@@ -116,152 +114,217 @@ pub fn run(test: &Test, behaviour: &Behaviour) -> Result<Vec<Vec<f64>>, String> 
                     test.hypothesis
                 )
             })?;
-        if imposed_strain[i].is_some() || imposed_stress[i].is_some() {
+        if constraints.iter().any(|(_, c, _)| *c == i) {
+            return Err(format!("`{component}`: this component is already imposed"));
+        }
+        constraints.push((*kind, i, evolution));
+    }
+    // Plane strain: EZZ is zero. Plane stress, and axisymmetrical generalised
+    // plane stress: the behaviour handles the out-of-plane strain, MTest
+    // imposes a zero gradient and a zero stress on that component.
+    let added: &[(Imposed, usize)] = match test.hypothesis {
+        Hypothesis::PlaneStrain => &[(Imposed::Strain, 2)],
+        Hypothesis::PlaneStress => &[(Imposed::Strain, 2), (Imposed::Stress, 2)],
+        Hypothesis::AxisymmetricalGeneralisedPlaneStress => {
+            &[(Imposed::Strain, 1), (Imposed::Stress, 1)]
+        }
+        _ => &[],
+    };
+    for &(_, i) in added {
+        if constraints.iter().any(|(_, c, _)| *c == i) {
             return Err(format!(
-                "`{component}`: this component is already imposed (in plane strain, EZZ is zero)"
+                "`{}` cannot be imposed in the {} hypothesis",
+                suffixes[i], test.hypothesis
             ));
         }
-        match kind {
-            Imposed::Strain => imposed_strain[i] = Some(evolution),
-            Imposed::Stress => imposed_stress[i] = Some(evolution),
-        }
     }
-    let free: Vec<usize> = (0..n).filter(|&i| imposed_strain[i].is_none()).collect();
+    constraints.extend(added.iter().map(|&(kind, i)| (kind, i, &zero)));
+    let multipliers = constraints
+        .iter()
+        .filter(|(kind, _, _)| *kind == Imposed::Strain)
+        .count();
+    let unknowns = n + multipliers;
 
-    let mut strain0 = vec![0.0; n];
+    // The unknowns at the beginning of the step: strains, then multipliers.
+    let mut u0 = vec![0.0; unknowns];
     let mut stress0 = vec![0.0; n];
     let (mut stored_energy, mut dissipated_energy) = (0.0, 0.0);
     let mut k = vec![0.0; d.tangent_operator_size];
+    // MTest scales the multipliers by the largest term of the first tangent
+    // operator it assembles, and keeps that factor for the whole test.
+    let mut normalisation: Option<f64> = None;
     let mut rows = Vec::new();
-    for (step, &end) in test.times.iter().enumerate() {
-        // From the previous time to `end`, halving the step on failure.
-        let mut start = if step == 0 { end } else { test.times[step - 1] };
-        let mut target = end;
-        let mut sub_steps = 0;
-        while start < end {
-            let (material0, material1) = (values(material, start), values(material, target));
-            let (external0, external1) = (values(external, start), values(external, target));
-            let mut strain1 = strain0.clone();
-            for (i, imposed) in imposed_strain.iter().enumerate() {
-                if let Some(evolution) = imposed {
-                    strain1[i] = evolution.value(target);
+    // The current time, the index of the next time of `@Times`, the current
+    // step: halved on failure and kept afterwards, as MTest does, until the
+    // next time of `@Times`.
+    let mut t = test.times[0];
+    let mut next = 1;
+    let mut dt = test.times[1] - t;
+    let mut sub_steps = 0;
+    // Whether the last attempt moved the state forward, to be written.
+    let mut advanced = true;
+    loop {
+        if advanced {
+            let mut row = vec![t];
+            row.extend(&u0[..n]);
+            row.extend(&stress0);
+            row.extend(&isv0);
+            row.extend([stored_energy, dissipated_energy]);
+            rows.push(row);
+        }
+        if next == test.times.len() {
+            return Ok(rows);
+        }
+        let end = test.times[next];
+        let target = (t + dt).min(end);
+        let (material0, material1) = (values(material, t), values(material, target));
+        let (external0, external1) = (values(external, t), values(external, target));
+        // No prediction: the iterations start from the previous state.
+        let mut u1 = u0.clone();
+        let mut stress1 = vec![0.0; n];
+        let mut isv1 = isv0.clone();
+        let mut iterations = 0;
+        let outcome = loop {
+            iterations += 1;
+            let s0 = InitialState {
+                gradients: &u0[..n],
+                thermodynamic_forces: &stress0,
+                material_properties: &material0,
+                internal_state_variables: &isv0,
+                external_state_variables: &external0,
+                stored_energy,
+                dissipated_energy,
+            };
+            let mut s1 = FinalState {
+                gradients: &u1[..n],
+                thermodynamic_forces: &mut stress1,
+                material_properties: &material1,
+                internal_state_variables: &mut isv1,
+                external_state_variables: &external1,
+            };
+            let tangent = Some((TangentOperator::ConsistentTangent, k.as_mut_slice()));
+            let integration = match behaviour.integrate(target - t, &s0, &mut s1, tangent) {
+                Ok(integration) => integration,
+                Err(e) => break Err(e.to_string()),
+            };
+            let a = *normalisation.get_or_insert_with(|| k.iter().fold(0.0, |m, v| m.max(v.abs())));
+
+            // MTest's system: the tangent operator bordered by the imposed
+            // strains, and the residual: the stress minus the imposed
+            // stresses and the multipliers, then the gaps to the imposed
+            // strains.
+            let mut system = vec![0.0; unknowns * unknowns];
+            for i in 0..n {
+                system[unknowns * i..unknowns * i + n].copy_from_slice(&k[n * i..n * (i + 1)]);
+            }
+            let mut residual = vec![0.0; unknowns];
+            residual[..n].copy_from_slice(&stress1);
+            let mut multiplier = n;
+            for &(kind, c, evolution) in &constraints {
+                match kind {
+                    Imposed::Stress => residual[c] -= evolution.value(target),
+                    Imposed::Strain => {
+                        system[unknowns * multiplier + c] -= a;
+                        system[unknowns * c + multiplier] -= a;
+                        residual[c] -= a * u1[multiplier];
+                        residual[multiplier] -= a * (u1[c] - evolution.value(target));
+                        multiplier += 1;
+                    }
                 }
             }
-            let target_stress: Vec<f64> = imposed_stress
-                .iter()
-                .map(|imposed| imposed.map_or(0.0, |e| e.value(target)))
-                .collect();
-            let mut stress1 = vec![0.0; n];
-            let mut isv1 = isv0.clone();
-            // The last correction of the free strains: none needed when every
-            // component is imposed.
-            let mut correction = if free.is_empty() { 0.0 } else { f64::INFINITY };
-            let mut iterations = 0;
-            let outcome = loop {
-                iterations += 1;
-                let s0 = InitialState {
-                    gradients: &strain0,
-                    thermodynamic_forces: &stress0,
-                    material_properties: &material0,
-                    internal_state_variables: &isv0,
-                    external_state_variables: &external0,
-                    stored_energy,
-                    dissipated_energy,
-                };
-                let mut s1 = FinalState {
-                    gradients: &strain1,
-                    thermodynamic_forces: &mut stress1,
-                    material_properties: &material1,
-                    internal_state_variables: &mut isv1,
-                    external_state_variables: &external1,
-                };
-                let tangent = Some((TangentOperator::ConsistentTangent, k.as_mut_slice()));
-                let integration = match behaviour.integrate(target - start, &s0, &mut s1, tangent) {
-                    Ok(integration) => integration,
-                    Err(e) => break Err(e.to_string()),
-                };
-                let residual: Vec<f64> = free
-                    .iter()
-                    .map(|&i| stress1[i] - target_stress[i])
-                    .collect();
-                let largest = residual.iter().fold(0.0_f64, |m, r| m.max(r.abs()));
-                if largest < test.stress_epsilon && correction < test.strain_epsilon {
-                    break Ok(integration);
+
+            // δu = system⁻¹·residual: Gauss elimination with partial
+            // pivoting, then u1 −= δu.
+            let m = unknowns;
+            let mut delta = residual.clone();
+            let mut singular = false;
+            for c in 0..m {
+                let pivot = (c..m)
+                    .max_by(|&x, &y| system[m * x + c].abs().total_cmp(&system[m * y + c].abs()))
+                    .unwrap_or(c);
+                if system[m * pivot + c] == 0.0 {
+                    singular = true;
+                    break;
                 }
-                if iterations == test.maximum_iterations {
-                    break Err(format!(
-                        "no convergence after {iterations} iterations (residual {largest:e})"
-                    ));
+                for j in 0..m {
+                    system.swap(m * c + j, m * pivot + j);
                 }
-                // Solve K·δ = −r on the free components: Gauss elimination
-                // with partial pivoting on the free rows and columns of the
-                // tangent operator.
-                let m = free.len();
-                let mut a: Vec<f64> = free
-                    .iter()
-                    .flat_map(|&i| free.iter().map(|&j| k[n * i + j]).collect::<Vec<_>>())
-                    .collect();
-                let mut delta: Vec<f64> = residual.iter().map(|r| -r).collect();
-                let mut singular = false;
-                for c in 0..m {
-                    let pivot = (c..m)
-                        .max_by(|&x, &y| a[m * x + c].abs().total_cmp(&a[m * y + c].abs()))
-                        .unwrap_or(c);
-                    if a[m * pivot + c] == 0.0 {
-                        singular = true;
-                        break;
+                delta.swap(c, pivot);
+                for row in c + 1..m {
+                    let factor = system[m * row + c] / system[m * c + c];
+                    for j in c..m {
+                        system[m * row + j] -= factor * system[m * c + j];
                     }
-                    for j in 0..m {
-                        a.swap(m * c + j, m * pivot + j);
+                    delta[row] -= factor * delta[c];
+                }
+            }
+            if singular {
+                break Err("singular system".to_owned());
+            }
+            for row in (0..m).rev() {
+                let known: f64 = (row + 1..m).map(|j| system[m * row + j] * delta[j]).sum();
+                delta[row] = (delta[row] - known) / system[m * row + row];
+            }
+            for (u, d) in u1.iter_mut().zip(&delta) {
+                *u -= d;
+            }
+
+            // MTest's criteria: never at the first iteration, then the
+            // correction and the residual of this iteration on the strain
+            // components, and every constraint.
+            let correction = delta[..n].iter().fold(0.0_f64, |m, d| m.max(d.abs()));
+            let largest = residual[..n].iter().fold(0.0_f64, |m, r| m.max(r.abs()));
+            let converged = iterations > 1
+                && correction <= test.strain_epsilon
+                && largest <= test.stress_epsilon
+                && constraints.iter().all(|&(kind, c, evolution)| match kind {
+                    Imposed::Strain => {
+                        (u1[c] - evolution.value(target)).abs() < test.strain_epsilon
                     }
-                    delta.swap(c, pivot);
-                    for row in c + 1..m {
-                        let factor = a[m * row + c] / a[m * c + c];
-                        for j in c..m {
-                            a[m * row + j] -= factor * a[m * c + j];
-                        }
-                        delta[row] -= factor * delta[c];
+                    Imposed::Stress => {
+                        (stress1[c] - evolution.value(target)).abs() < test.stress_epsilon
+                    }
+                });
+            if converged {
+                break Ok(integration);
+            }
+            if iterations == test.maximum_iterations
+                || !correction.is_finite()
+                || !largest.is_finite()
+            {
+                break Err(format!(
+                    "no convergence after {iterations} iterations (residual {largest:e})"
+                ));
+            }
+        };
+        match outcome {
+            Ok(integration) => {
+                advanced = true;
+                println!("from {t} to {target}: {iterations} iteration(s)");
+                (u0, stress0, isv0) = (u1, stress1, isv1);
+                (stored_energy, dissipated_energy) =
+                    (integration.stored_energy, integration.dissipated_energy);
+                t = target;
+                if end - t <= 1e-12 * end.abs().max(1.0) {
+                    t = end;
+                    next += 1;
+                    sub_steps = 0;
+                    if next < test.times.len() {
+                        dt = test.times[next] - t;
                     }
                 }
-                if singular {
-                    break Err("singular tangent operator".to_owned());
-                }
-                for row in (0..m).rev() {
-                    let known: f64 = (row + 1..m).map(|j| a[m * row + j] * delta[j]).sum();
-                    delta[row] = (delta[row] - known) / a[m * row + row];
-                }
-                correction = delta.iter().fold(0.0_f64, |m, d| m.max(d.abs()));
-                for (&i, d) in free.iter().zip(&delta) {
-                    strain1[i] += d;
-                }
-            };
-            match outcome {
-                Ok(integration) => {
-                    println!("from {start} to {target}: {iterations} iteration(s)");
-                    (strain0, stress0, isv0) = (strain1, stress1, isv1);
-                    (stored_energy, dissipated_energy) =
-                        (integration.stored_energy, integration.dissipated_energy);
-                    start = target;
-                    target = end;
-                }
-                Err(e) if sub_steps < test.maximum_sub_steps => {
-                    println!("from {start} to {target}: {e}, halving the time step");
-                    sub_steps += 1;
-                    target = start + (target - start) / 2.0;
-                }
-                Err(e) => {
+            }
+            Err(e) => {
+                advanced = false;
+                sub_steps += 1;
+                if sub_steps == test.maximum_sub_steps {
                     return Err(format!(
-                        "from {start} to {target}: {e}, after {sub_steps} sub-steps"
+                        "from {t} to {target}: {e}, after {sub_steps} sub-steps"
                     ));
                 }
+                println!("from {t} to {target}: {e}, halving the time step");
+                dt /= 2.0;
             }
         }
-        let mut row = vec![end];
-        row.extend(&strain0);
-        row.extend(&stress0);
-        row.extend(&isv0);
-        row.extend([stored_energy, dissipated_energy]);
-        rows.push(row);
     }
-    Ok(rows)
 }

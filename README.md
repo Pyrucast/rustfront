@@ -38,8 +38,9 @@ With `mfront` and `mtest` (TFEL 5.1.0 or later), `cargo` and `python3` in the
 
 The script compiles the test behaviours of `tests/behaviours`, runs the
 minimal example, then runs every case of `mtest-rs/cases` with MTest and with
-[mtest-rs](mtest-rs), and compares the two result files column by column
-with `scripts/compare.py`. Everything it writes goes to `target/try`.
+[mtest-rs](mtest-rs), compares the two result files column by column with
+`scripts/compare.py`, and checks that both make the same number of Newton
+iterations at every step. Everything it writes goes to `target/try`.
 
 ## Minimal example
 

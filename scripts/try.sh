@@ -58,6 +58,17 @@ for case in "$root"/mtest-rs/cases/*.mtest; do
     fi
     if ! python3 "$root/scripts/compare.py" "$name.res" "$name-rs.res"; then
         failed+=("$name")
+        continue
+    fi
+    # Both follow the same algorithm: the same number of Newton iterations at
+    # every step.
+    mtest_iterations=$(grep -o 'after [0-9]* iterations' "$name.mtest.log" | awk '{print $2}' | xargs)
+    rs_iterations=$(grep -o ': [0-9]* iteration' "$name.mtest-rs.log" | awk '{print $2}' | xargs)
+    if [ "$mtest_iterations" = "$rs_iterations" ]; then
+        echo "same iterations at every step: $rs_iterations"
+    else
+        echo "iterations differ: MTest $mtest_iterations, mtest-rs $rs_iterations"
+        failed+=("$name")
     fi
 done
 

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Compare two result files of MTest or mtest-rs, column by column.
 
-usage: compare.py reference.res candidate.res [--rtol 1e-6]
+usage: compare.py reference.res candidate.res [--rtol 1e-12]
 
 The tolerance of a column is rtol times the largest absolute value of its
 group: all the strain components together, all the stress components
 together, every other column on its own. A free stress component, zero up to
 round-off, is thus compared with the scale of the stresses, not with its own
 noise.
+
+mtest-rs follows MTest's algorithm, so both agree to round-off: the default
+tolerance, 1e-12, is meant for results written with 14 digits
+(`@OutputFilePrecision 14`).
 
 Exit code: 0 when every column agrees, 1 otherwise.
 """
@@ -18,7 +22,7 @@ import sys
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("reference")
 parser.add_argument("candidate")
-parser.add_argument("--rtol", type=float, default=1e-6)
+parser.add_argument("--rtol", type=float, default=1e-12)
 args = parser.parse_args()
 
 # Each file: the column names of its header, then its rows of numbers.

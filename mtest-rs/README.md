@@ -65,10 +65,23 @@ sinh cosh tanh exp log ln log10 sqrt abs`.
 - No `@Test` (comparison with reference values), no JUnit report, no
   acceleration algorithms, no prediction policies, no rotation matrix, no
   pipe tests.
-- Each time step is solved by Newton iterations on the free strain
-  components with the consistent tangent operator, halving the step on
-  failure. The converged results agree with MTest's to round-off; the number
-  of iterations may differ by one.
+
+## Algorithm
+
+The same as MTest's default one, so that both give the same results:
+
+- the unknowns are the strain components and one Lagrange multiplier per
+  imposed strain, scaled by the largest term of the first tangent operator;
+- each step starts from the previous state (no prediction) and is solved by
+  Newton iterations with the consistent tangent operator;
+- an iteration has converged, never the first one, when its correction of
+  the strain and its residual are below `@StrainEpsilon` and
+  `@StressEpsilon`, and every imposed strain and stress is met;
+- on failure, the step is halved, and kept halved until the next time of
+  `@Times`.
+
+On the cases of `cases/`, mtest-rs makes the same number of iterations as
+MTest 5.1.0 at every step, and the results agree to 1e-13 relative.
 
 ## License
 
