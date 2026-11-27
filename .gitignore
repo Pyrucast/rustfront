@@ -1,0 +1,13 @@
+# Sorties de cargo.
+/target/
+
+# Bibliothèque : pas de Cargo.lock versionné, comme dans pyrucast.
+Cargo.lock
+
+# Sauvegardes de rustfmt.
+**/*.rs.bk
+
+# rust-analyzer, éditeurs.
+rust-project.json
+.vscode/
+*.swp

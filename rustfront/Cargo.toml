@@ -1,0 +1,18 @@
+[package]
+name = "rustfront"
+description = "Safe Rust interface to MFront material behaviours, through MGIS"
+readme = "README.md"
+keywords = ["mfront", "mgis", "fem", "mechanics", "material"]
+categories = ["api-bindings", "science"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rustfront-sys.workspace = true
+
+[lints]
+workspace = true
