@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use rustfront::voigt::{self, Shear};
 use rustfront::{
     Behaviour, Error, FinalState, Hypothesis, InitialState, Symmetry, TangentOperator, VariableType,
 };
@@ -180,6 +181,25 @@ fn uniaxial_strain_gives_the_elastic_stress_and_tangent() {
     assert_close(k[1], LAMBDA);
     assert_close(k[3 * 6 + 3], 2.0 * MU);
     assert_eq!(k[3], 0.0);
+}
+
+#[test]
+fn the_voigt_tangent_has_the_shear_modulus() {
+    // Any strain: the tangent of linear elasticity does not depend on it.
+    let (_, _, k) = elastic([1e-3, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut d = [0.0; 36];
+    voigt::tangent_from_tfel(&k, Shear::Engineering, &mut d);
+    for i in 0..6 {
+        for j in 0..6 {
+            let expected = match (i < 3, j < 3) {
+                (true, true) if i == j => LAMBDA + 2.0 * MU,
+                (true, true) => LAMBDA,
+                (false, false) if i == j => MU,
+                _ => 0.0,
+            };
+            assert_close(d[6 * i + j], expected);
+        }
+    }
 }
 
 #[test]

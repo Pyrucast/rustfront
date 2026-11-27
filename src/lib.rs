@@ -12,7 +12,9 @@
 //! The arrays of a material point are **borrowed** from the caller, who can
 //! keep the values of all its points in contiguous storage: see
 //! [`InitialState`] and [`FinalState`]. Symmetric tensors are stored in
-//! TFEL's convention: `xx`, `yy`, `zz`, `√2·xy`, `√2·xz`, `√2·yz`.
+//! TFEL's convention: `xx`, `yy`, `zz`, `√2·xy`, `√2·xz`, `√2·yz`; the
+//! [`voigt`] module converts them, and the tangent operator, to and from the
+//! standard Voigt notation.
 //!
 //! Only loading is `unsafe`, because opening a library runs its code: once
 //! [`Behaviour::load`] has checked what the library declares, integrating is
@@ -27,6 +29,7 @@ mod behaviour;
 mod error;
 mod ffi;
 mod hypothesis;
+pub mod voigt;
 
 pub use behaviour::{
     Behaviour, Description, FinalState, InitialState, Integration, Symmetry, TangentOperator,
