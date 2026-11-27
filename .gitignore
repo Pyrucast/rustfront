@@ -1,7 +1,7 @@
 # Sorties de cargo.
 /target/
 
-# Bibliothèque : pas de Cargo.lock versionné, comme dans pyrucast.
+# Bibliothèque : pas de Cargo.lock versionné.
 Cargo.lock
 
 # Sauvegardes de rustfmt.
