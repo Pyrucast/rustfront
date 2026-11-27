@@ -1,16 +1,11 @@
 [package]
 name = "rustfront"
-# 0.0.x until the API is usable: 0.1.0 will be the first version that
-# integrates a behaviour.
-version = "0.0.1"
-edition = "2024"
-# Minimum compiler, set by `libloading` 0.9, which declares 1.88 (edition 2024
-# alone would only need 1.85). Without this line, a user would get a raw error
-# instead of a message naming the expected version.
-rust-version = "1.88"
-authors = ["Gauthier F"]
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/Pyrucast/rustfront"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 # crates.io searches the name, the description and the keywords. The name does
 # not contain "mfront": the description and the first keyword are what makes
@@ -25,6 +20,26 @@ workspace = true
 # The library at the root, and `mtest-rs`, the command line tool built on it.
 [workspace]
 members = ["mtest-rs"]
+
+# Shared by both packages: one version for both, released together by a tag
+# `vX.Y.Z` (see .github/workflows/release.yml, whose `check-version` job
+# compares the tag with this version and with the one of the dependency below).
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Minimum compiler, set by `libloading` 0.9, which declares 1.88 (edition 2024
+# alone would only need 1.85). Without this line, a user would get a raw error
+# instead of a message naming the expected version. Checked by the `msrv` job
+# of .github/workflows/ci.yml.
+rust-version = "1.88"
+authors = ["Gauthier F"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Pyrucast/rustfront"
+
+# `mtest-rs` depends on `rustfront` by path in the repository, and by version
+# once published: crates.io needs the version, which must follow the one above.
+[workspace.dependencies]
+rustfront = { path = ".", version = "0.1.0" }
 
 # Lints added to those clippy already applies, for both packages.
 # `unnecessary_wraps` rejects a `Result` that can never be an error, and an

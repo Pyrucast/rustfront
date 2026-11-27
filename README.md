@@ -1,5 +1,9 @@
 # rustfront
 
+[![CI](https://github.com/Pyrucast/rustfront/actions/workflows/ci.yml/badge.svg)](https://github.com/Pyrucast/rustfront/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/rustfront.svg)](https://crates.io/crates/rustfront)
+[![docs.rs](https://docs.rs/rustfront/badge.svg)](https://docs.rs/rustfront)
+
 Evaluate [MFront] material behaviours (constitutive laws) at a material point,
 in pure Rust.
 
@@ -67,6 +71,26 @@ with C, Fortran, Python and Julia bindings; Rust bindings are on its roadmap
 ([thelfer/MFrontGenericInterfaceSupport#376](https://github.com/thelfer/MFrontGenericInterfaceSupport/issues/376)).
 `rustfront` takes another route: it reads the description each behaviour
 exports and calls the behaviour itself, without going through MGIS.
+
+## Releasing
+
+`rustfront` and `mtest-rs` share one version, declared twice in the root
+`Cargo.toml`: in `[workspace.package]`, and in the `rustfront` entry of
+`[workspace.dependencies]`. To release:
+
+```bash
+# set the new version on both lines of Cargo.toml, then
+git commit -am "Release X.Y.Z"
+git tag -a vX.Y.Z -m "rustfront and mtest-rs X.Y.Z"
+git push origin master vX.Y.Z
+```
+
+The tag starts `.github/workflows/release.yml`: it checks that the tag matches
+`Cargo.toml`, runs the CI, publishes `rustfront` then `mtest-rs` on crates.io
+through Trusted Publishing (no token stored in GitHub), and creates the GitHub
+release. Each crate must have this workflow as its trusted publisher on
+crates.io: owner `Pyrucast`, repository `rustfront`, workflow `release.yml`,
+no environment.
 
 ## License
 

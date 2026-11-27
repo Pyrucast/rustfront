@@ -1,0 +1,96 @@
+name: CI
+
+# Checks the workspace on every push to master and every pull request. The
+# release workflow calls this one (workflow_call), so that what is published
+# has gone through exactly these checks.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per branch, pull request or tag: a newer push cancels the older
+  # run. Called by the release workflow, `github.workflow` is the caller's.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The TFEL version the tests compile the behaviours with, and that
+  # scripts/try.sh compares mtest-rs against: the minimum rustfront supports.
+  TFEL_VERSION: '5.1.0'
+
+jobs:
+  check:
+    name: Formatting, lints, tests, docs, comparison with MTest, packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # TFEL is not packaged for Ubuntu nor conda-forge: it is built from its
+      # tag once (a few minutes), then restored from the cache. The key names
+      # the runner image (`ubuntu24`, …), whose compiler built the binaries.
+      - name: Runner image
+        id: image
+        run: echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
+      - name: Restore TFEL
+        id: tfel
+        uses: actions/cache@v6
+        with:
+          path: ~/tfel-${{ env.TFEL_VERSION }}
+          key: tfel-${{ env.TFEL_VERSION }}-${{ steps.image.outputs.os }}-${{ runner.arch }}
+      - name: Build TFEL
+        if: steps.tfel.outputs.cache-hit != 'true'
+        run: |
+          git clone --quiet --depth 1 --branch "TFEL-$TFEL_VERSION" \
+            https://github.com/thelfer/tfel.git "$RUNNER_TEMP/tfel"
+          cmake -S "$RUNNER_TEMP/tfel" -B "$RUNNER_TEMP/tfel-build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/tfel-$TFEL_VERSION" \
+            -Denable-testing=OFF -Denable-website=OFF -Denable-mfront-quantity-tests=OFF
+          cmake --build "$RUNNER_TEMP/tfel-build" --parallel "$(nproc)"
+          cmake --install "$RUNNER_TEMP/tfel-build"
+      - name: Put TFEL in the PATH
+        run: |
+          echo "$HOME/tfel-$TFEL_VERSION/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$HOME/tfel-$TFEL_VERSION/lib" >> "$GITHUB_ENV"
+      - name: TFEL version
+        run: mfront --version
+
+      # One step per check, so that the interface shows which one fails.
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+      - name: Comparison of mtest-rs with MTest
+        run: ./scripts/try.sh
+      # Packages both crates and compiles them as crates.io will, mtest-rs
+      # against the packaged rustfront.
+      - name: Packaging
+        run: cargo publish --workspace --dry-run
+
+  msrv:
+    name: Minimum Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The `rust-version` declared in Cargo.toml: building with it is the
+      # only way to know it still holds. No TFEL needed: nothing runs.
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets

@@ -6,7 +6,7 @@ stresses and internal state variables in a `.res` file.
 
 > **mtest-rs is an unofficial, independent reimplementation in Rust of a
 > subset of [MTest], which is part of TFEL.** It is built on
-> [rustfront](..). It is not affiliated with the TFEL project, CEA or EDF,
+> [rustfront](https://crates.io/crates/rustfront). It is not affiliated with the TFEL project, CEA or EDF,
 > and it is written from MTest's documentation and observed behaviour, not
 > from its code.
 
