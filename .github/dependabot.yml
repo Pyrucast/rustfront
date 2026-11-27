@@ -1,8 +1,14 @@
 # Pull requests to update the GitHub Actions the workflows use (checkout,
-# cache, rust-toolchain, …), checked by the CI like any other change.
+# cache, rust-cache, …), checked by the CI like any other change.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      # Its references name Rust toolchains, not versions of the action:
+      # `@stable`, and `@1.88`, the minimum Rust version the `msrv` job checks.
+      # Dependabot took `1.88` for a version and proposed `1.120`, a toolchain
+      # that does not exist yet.
+      - dependency-name: dtolnay/rust-toolchain
