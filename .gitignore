@@ -1,13 +1,13 @@
-# Sorties de cargo.
+# Cargo output.
 /target/
 
-# Bibliothèque : pas de Cargo.lock versionné.
+# A library: Cargo.lock is not versioned.
 Cargo.lock
 
-# Sauvegardes de rustfmt.
+# rustfmt backups.
 **/*.rs.bk
 
-# rust-analyzer, éditeurs.
+# rust-analyzer, editors.
 rust-project.json
 .vscode/
 *.swp
