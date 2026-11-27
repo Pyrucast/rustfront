@@ -1,32 +1,31 @@
 # rustfront
 
-Use [MFront] material behaviours from Rust.
+Evaluate [MFront] material behaviours (constitutive laws) at a material point,
+in pure Rust.
 
-MFront generates material behaviours (elasticity, plasticity, creep, …) as
-shared libraries. `rustfront` loads and integrates them from Rust code, such as
-the [pyrucast] finite-element library, through the C API of [MGIS]
-(MFrontGenericInterfaceSupport).
+MFront compiles material behaviours (elasticity, plasticity, creep, …) into
+shared libraries. `rustfront` loads the libraries generated with MFront's
+`generic` interface and integrates a behaviour at one material point, from
+Rust code such as the [pyrucast] finite-element library.
+
+It talks to the generated library directly: no [MGIS], no C or C++ build
+dependency, nothing to compile but Rust.
 
 > **Status:** early development, nothing usable yet.
 
-## Crates
-
-| Crate | Role |
-|---|---|
-| [`rustfront`](rustfront) | Safe interface, the one solvers use |
-| [`rustfront-sys`](rustfront-sys) | Raw `unsafe` bindings to the C API of MGIS |
-
 ## Requirements
 
-MGIS must be installed, with its C bindings (`libMFrontGenericInterface-c`).
-`rustfront-sys` will link to it dynamically by default.
+- Behaviours compiled by MFront with the `generic` interface:
+  `mfront --obuild --interface=generic Norton.mfront`.
+- Rust 1.85 or later.
 
-Rust 1.85 or later.
+## Relation to MGIS
 
-## Upstream
-
-Rust bindings are also on the MGIS roadmap:
-[thelfer/MFrontGenericInterfaceSupport#376](https://github.com/thelfer/MFrontGenericInterfaceSupport/issues/376).
+[MGIS] is the official library for calling MFront behaviours from a solver,
+with C, Fortran, Python and Julia bindings; Rust bindings are on its roadmap
+([thelfer/MFrontGenericInterfaceSupport#376](https://github.com/thelfer/MFrontGenericInterfaceSupport/issues/376)).
+`rustfront` takes another route: it reads the description each behaviour
+exports and calls the behaviour itself, without going through MGIS.
 
 ## License
 
@@ -38,10 +37,6 @@ Licensed under either of
   <https://opensource.org/licenses/MIT>)
 
 at your option.
-
-MGIS itself is distributed under the LGPL v3 or the CeCILL-C licence, and
-programs that link to it must respect its terms. Linking dynamically, the
-default, keeps those obligations minimal.
 
 ### Contribution
 

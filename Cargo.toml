@@ -1,18 +1,8 @@
-# Deux paquets, selon la convention des crates qui enveloppent une bibliothèque
-# C : `rustfront-sys` ne contient que les déclarations brutes de l'API C de
-# MGIS (`extern "C"`, aucune garantie), `rustfront` construit au-dessus l'API
-# sûre que les solveurs utilisent. Séparer les deux permet à plusieurs crates de
-# partager une seule liaison à MGIS : cargo refuse deux paquets qui déclarent le
-# même `links`.
-[workspace]
-members = ["rustfront", "rustfront-sys"]
-resolver = "3"
-
-# Champs communs aux deux paquets, hérités par `x.workspace = true`. La version
-# n'est déclarée qu'**une fois** dans tout le dépôt : les deux crates sont
-# publiées ensemble.
-[workspace.package]
-version = "0.1.0"
+[package]
+name = "rustfront"
+# 0.0.x tant que l'API n'est pas utilisable : 0.1.0 sera la première version
+# qui intègre réellement une loi.
+version = "0.0.1"
 edition = "2024"
 # Plancher de compilateur : l'edition 2024, stabilisée en 1.85, est la seule
 # exigence à ce jour. Sans cette ligne, un utilisateur recevrait une erreur
@@ -21,14 +11,16 @@ rust-version = "1.85"
 authors = ["Gauthier F"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Pyrucast/rustfront"
-
-# `rustfront` dépend de `rustfront-sys` par chemin dans le dépôt, et par version
-# une fois publié sur crates.io : cargo exige les deux pour publier.
-[workspace.dependencies]
-rustfront-sys = { path = "rustfront-sys", version = "0.1.0" }
+readme = "README.md"
+# La recherche de crates.io porte sur le nom, la description et les mots-clés.
+# Le nom ne contient pas « mfront » : la description et le premier mot-clé
+# sont donc ce qui fait trouver la crate à qui tape « mfront ».
+description = "Evaluate MFront material behaviours (constitutive laws) at a material point, in pure Rust, without MGIS or any C++ build dependency"
+keywords = ["mfront", "tfel", "mechanics", "material", "fem"]
+categories = ["science", "simulation", "api-bindings"]
 
 # Lints ajoutés à ceux que clippy applique déjà, comme dans pyrucast.
 # `unnecessary_wraps` refuse un `Result` qui ne peut jamais être une erreur, et
 # une `Option` toujours `Some`. `clippy.toml` l'étend à l'API publique.
-[workspace.lints.clippy]
+[lints.clippy]
 unnecessary_wraps = "warn"
