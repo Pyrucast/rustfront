@@ -27,6 +27,38 @@ Only loading a library is `unsafe`; integrating is safe.
 - To run the tests, `mfront` in the `PATH`: the tests compile the behaviours
   of `tests/behaviours` and fail without it.
 
+## Try it
+
+With `mfront` and `mtest` (TFEL 5.1.0 or later), `cargo` and `python3` in the
+`PATH`:
+
+```bash
+./scripts/try.sh
+```
+
+The script compiles the test behaviours of `tests/behaviours`, runs the
+minimal example, then runs every case of `mtest-rs/cases` with MTest and with
+[mtest-rs](mtest-rs), and compares the two result files column by column
+with `scripts/compare.py`. Everything it writes goes to `target/try`.
+
+## Minimal example
+
+[`examples/minimal.rs`](examples/minimal.rs) loads a behaviour, prints its
+description, integrates it once at one material point and prints the stress
+and the tangent operator:
+
+```bash
+mfront --obuild --interface=generic tests/behaviours/Elasticity.mfront
+cargo run --example minimal -- src/libBehaviour.so
+```
+
+## mtest-rs
+
+[mtest-rs](mtest-rs), in this repository, tests a behaviour at one material
+point over a loading history: an unofficial, independent reimplementation of
+a subset of MTest built on `rustfront`, reading the same `.mtest` files and
+writing the same `.res` files.
+
 ## Relation to MGIS
 
 [MGIS] is the official library for calling MFront behaviours from a solver,
