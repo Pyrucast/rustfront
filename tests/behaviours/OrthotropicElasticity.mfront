@@ -1,0 +1,21 @@
+@DSL Default;
+@Behaviour OrthotropicElasticity;
+@Author rustfront contributors;
+@Description {
+  Orthotropic linear elasticity, written for the tests of rustfront: its
+  stiffness tensor is built from the nine elastic constants, given as
+  material properties in the material frame. The stress is integrated
+  incrementally, so that the stress at the beginning of the step, in the
+  material frame, matters.
+}
+
+@OrthotropicBehaviour;
+@RequireStiffnessTensor;
+@ProvidesSymmetricTangentOperator;
+
+@Integrator {
+  sig += D * deto;
+  if (computeTangentOperator_) {
+    Dt = D;
+  }
+}

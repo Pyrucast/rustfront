@@ -60,6 +60,7 @@ be imposed, usually all six off-diagonal components to zero.
 | `@OutOfBoundsPolicy` | `'None'`, `'Warning'` or `'Strict'` |
 | `@Times` | `{0, 1 in 10, 2}` |
 | `@Real` | a value or an expression, usable in functions |
+| `@RotationMatrix[<Standard\|Euler\|Miller\|Direction>]` | the material frame of an orthotropic behaviour: `{{…}, {…}, {…}}` by rows, `{ψ, θ, φ}`, `{h, k, l}`, or `{x, y}` in 2D and `{{…}, {…}}` in 3D; values or expressions of `@Real` constants |
 | `@OutputFile`, `@OutputFilePrecision` | 6 digits by default |
 | `@StrainEpsilon`, `@StressEpsilon` | `1e-12` and `1e-3` by default |
 | `@MaximumNumberOfIterations`, `@MaximumNumberOfSubSteps` | `100` and `10` by default |
@@ -79,8 +80,7 @@ sinh cosh tanh exp log ln log10 sqrt abs`.
   the rows of the shear. On the same results, it then makes one more
   iteration, and it cannot solve free shear components.
 - No `@Test` (comparison with reference values), no JUnit report, no
-  acceleration algorithms, no prediction policies, no rotation matrix, no
-  pipe tests.
+  acceleration algorithms, no prediction policies, no pipe tests.
 
 ## Algorithm
 
@@ -95,7 +95,12 @@ The same as MTest's default one, so that both give the same results:
   the strain and its residual are below `@StrainEpsilon` and
   `@StressEpsilon`, and every imposed strain and stress is met;
 - on failure, the step is halved, and kept halved until the next time of
-  `@Times`.
+  `@Times`;
+- an orthotropic behaviour with a rotation matrix integrates in its material
+  frame: the strains and the stress at the beginning of the step are rotated
+  to it, the stress and the tangent operator it computes back to the global
+  frame, in which the results are written; its internal state variables stay
+  in the material frame.
 
 On the cases of `cases/`, the results of mtest-rs and MTest 5.1.0 agree to
 1e-12 relative, and both make the same number of iterations at every step,

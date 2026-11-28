@@ -1,0 +1,16 @@
+// Uniaxial tension of the orthotropic elasticity test behaviour in plane
+// strain, its material axes at 45° about z.
+@ModellingHypothesis 'PlaneStrain';
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'OrthotropicElasticity';
+@MaterialProperty<constant> 'YoungModulus1' 200e9;
+@MaterialProperty<constant> 'YoungModulus2' 100e9;
+@MaterialProperty<constant> 'YoungModulus3' 50e9;
+@MaterialProperty<constant> 'PoissonRatio12' 0.3;
+@MaterialProperty<constant> 'PoissonRatio23' 0.2;
+@MaterialProperty<constant> 'PoissonRatio13' 0.25;
+@MaterialProperty<constant> 'ShearModulus12' 40e9;
+@ExternalStateVariable 'Temperature' 293.15;
+@RotationMatrix<Direction> {1, 1};
+@ImposedStrain 'EXX' {0:0, 1:1e-3};
+@Times {0, 1 in 5};

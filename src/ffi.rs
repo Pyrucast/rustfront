@@ -69,6 +69,13 @@ pub(crate) type SetParameterFn = unsafe extern "C" fn(*const c_char, f64) -> c_i
 pub(crate) type SetIntegerParameterFn = unsafe extern "C" fn(*const c_char, c_int) -> c_int;
 pub(crate) type SetUnsignedShortParameterFn = unsafe extern "C" fn(*const c_char, u16) -> c_int;
 
+/// `void <Behaviour>_<Hypothesis>_rotateArrayOf<Variables>(mfront_gb_real*
+/// const dest, const mfront_gb_real* const src, const mfront_gb_real* const
+/// r, const mfront_gb_size_type n)`: rotates `n` points, the 9 values of `r`
+/// by rows. Each variable is copied before being written, so `dest` may be
+/// `src`; a scalar variable is not written at all.
+pub(crate) type RotateFn = unsafe extern "C" fn(*mut f64, *const f64, *const f64, usize);
+
 /// `void <Behaviour>_setOutOfBoundsPolicy(const int)`: 0 None, 1 Warning, 2
 /// Strict. A static variable of the library too; the function does nothing
 /// when the behaviour forbids changing its policy.

@@ -1,6 +1,6 @@
 //! Reading `.mtest` files: the subset of MTest's syntax listed in the README.
 
-use rustfront::{Hypothesis, OutOfBoundsPolicy, ParameterValue};
+use rustfront::{Hypothesis, OutOfBoundsPolicy, ParameterValue, Rotation};
 
 use crate::expression::Expression;
 
@@ -68,6 +68,9 @@ pub struct Test {
     pub stress_epsilon: f64,
     pub maximum_iterations: usize,
     pub maximum_sub_steps: usize,
+    /// The material frame of an orthotropic behaviour: `None` when it is the
+    /// global frame.
+    pub rotation: Option<Rotation>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -303,6 +306,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
         stress_epsilon: 1e-3,
         maximum_iterations: 100,
         maximum_sub_steps: 10,
+        rotation: None,
     };
     // The values declared by `@Real`, usable in the expressions.
     let mut constants: Vec<(String, f64)> = Vec::new();
@@ -334,10 +338,21 @@ pub fn parse(source: &str) -> Result<Test, String> {
             "@ImposedStrain",
             "@ImposedStress",
             "@ImposedDeformationGradient",
+            "@RotationMatrix",
         ];
         if option.is_some() && !with_option.contains(&keyword.as_str()) {
             return Err(format!("line {line}: `{keyword}` takes no option"));
         }
+        // A value: a number, or an expression of the `@Real` constants.
+        let value = |tokens: &mut Tokens, constants: &[(String, f64)]| -> Result<f64, String> {
+            match tokens.next()? {
+                (Token::Number(value), _) => Ok(value),
+                (Token::Text(text), line) => Ok(Expression::parse(&text, constants)
+                    .map_err(|e| format!("line {line}: {e}"))?
+                    .value(0.0)),
+                (token, line) => Err(format!("line {line}: expected a value, found {token:?}")),
+            }
+        };
         // An integer parameter: a whole positive number.
         let count = |tokens: &mut Tokens| -> Result<usize, String> {
             let value = tokens.number()?;
@@ -430,16 +445,120 @@ pub fn parse(source: &str) -> Result<Test, String> {
             }
             "@Real" => {
                 let name = tokens.text()?;
-                let value = match tokens.next()? {
-                    (Token::Number(value), _) => value,
-                    (Token::Text(text), line) => Expression::parse(&text, &constants)
-                        .map_err(|e| format!("line {line}: {e}"))?
-                        .value(0.0),
-                    (token, line) => {
-                        return Err(format!("line {line}: expected a value, found {token:?}"))
+                let value = value(&mut tokens, &constants)?;
+                constants.push((name, value));
+            }
+            "@RotationMatrix" => {
+                if test.rotation.is_some() {
+                    return Err(format!(
+                        "line {line}: the rotation matrix is already defined"
+                    ));
+                }
+                // `{v1, v2, …}`: `n` values.
+                let list = |tokens: &mut Tokens, n: usize| -> Result<Vec<f64>, String> {
+                    tokens.symbol('{')?;
+                    let mut values = vec![value(tokens, &constants)?];
+                    for _ in 1..n {
+                        tokens.symbol(',')?;
+                        values.push(value(tokens, &constants)?);
+                    }
+                    tokens.symbol('}')?;
+                    Ok(values)
+                };
+                let rotation = match option.as_deref() {
+                    // `{{r00, r01, r02}, {…}, {…}}`, by rows.
+                    None | Some("Standard") => {
+                        tokens.symbol('{')?;
+                        let mut matrix = [[0.0; 3]; 3];
+                        for (i, row) in matrix.iter_mut().enumerate() {
+                            if i > 0 {
+                                tokens.symbol(',')?;
+                            }
+                            row.copy_from_slice(&list(&mut tokens, 3)?);
+                        }
+                        tokens.symbol('}')?;
+                        Rotation::new(matrix)
+                    }
+                    // `{ψ, θ, φ}` in radians, or between two braces as MTest
+                    // still accepts.
+                    Some("Euler") => {
+                        let twice = tokens
+                            .list
+                            .get(tokens.position + 1)
+                            .is_some_and(|(token, _)| *token == Token::Symbol('{'));
+                        if twice {
+                            tokens.symbol('{')?;
+                        }
+                        let angles = list(&mut tokens, 3)?;
+                        if twice {
+                            tokens.symbol('}')?;
+                        }
+                        let [(sin_psi, cos_psi), (sin_theta, cos_theta), (sin_phi, cos_phi)] =
+                            [0, 1, 2].map(|i| angles[i].sin_cos());
+                        Rotation::new([
+                            [
+                                cos_phi * cos_psi - sin_phi * cos_theta * sin_psi,
+                                cos_phi * sin_psi + sin_phi * cos_theta * cos_psi,
+                                sin_phi * sin_theta,
+                            ],
+                            [
+                                -sin_phi * cos_psi - cos_phi * cos_theta * sin_psi,
+                                -sin_phi * sin_psi + cos_phi * cos_theta * cos_psi,
+                                cos_phi * sin_theta,
+                            ],
+                            [sin_theta * sin_psi, -sin_theta * cos_psi, cos_theta],
+                        ])
+                    }
+                    // `{h, k, l}`: the Miller indices of the third axis.
+                    Some("Miller") => {
+                        let indices = list(&mut tokens, 3)?;
+                        if indices.iter().any(|i| i.fract() != 0.0)
+                            || indices.iter().all(|i| *i == 0.0)
+                        {
+                            return Err(format!(
+                                "line {line}: the Miller indices are integers, not all zero"
+                            ));
+                        }
+                        let norm = indices.iter().map(|i| i * i).sum::<f64>().sqrt();
+                        let [nx, ny, nz] = [0, 1, 2].map(|i| indices[i] / norm);
+                        let (c, s, q) = if indices[0] == 0.0 && indices[1] == 0.0 {
+                            (1.0, 0.0, 0.0)
+                        } else {
+                            let q = (nx * nx + ny * ny).sqrt();
+                            (ny / q, nx / q, q)
+                        };
+                        Rotation::new([[c, -s, 0.0], [nz * s, nz * c, -q], [nx, ny, nz]])
+                    }
+                    // The first material axis `{x, y}` in 2D, the first two
+                    // `{{…}, {…}}` in 3D.
+                    Some("Direction") => match test.hypothesis.space_dimension() {
+                        2 => {
+                            let v = list(&mut tokens, 2)?;
+                            Rotation::from_axes([v[0], v[1], 0.0], [-v[1], v[0], 0.0])
+                        }
+                        3 => {
+                            tokens.symbol('{')?;
+                            let v1 = list(&mut tokens, 3)?;
+                            tokens.symbol(',')?;
+                            let v2 = list(&mut tokens, 3)?;
+                            tokens.symbol('}')?;
+                            Rotation::from_axes([v1[0], v1[1], v1[2]], [v2[0], v2[1], v2[2]])
+                        }
+                        _ => {
+                            return Err(format!(
+                                "line {line}: no direction in the {} hypothesis",
+                                test.hypothesis
+                            ))
+                        }
+                    },
+                    Some(other) => {
+                        return Err(format!(
+                            "line {line}: unknown rotation matrix `{other}`, expected \
+                             `Standard`, `Euler`, `Miller` or `Direction`"
+                        ))
                     }
                 };
-                constants.push((name, value));
+                test.rotation = Some(rotation.map_err(|e| format!("line {line}: {e}"))?);
             }
             "@Parameter" | "@IntegerParameter" | "@UnsignedIntegerParameter" => {
                 let name = tokens.text()?;

@@ -1,0 +1,19 @@
+// Uniaxial tension of the orthotropic elasticity test behaviour, its
+// material axes at 30° from x and y about z, given by two directions whose
+// components are expressions: the shear strains are free, at zero stress.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'OrthotropicElasticity';
+@MaterialProperty<constant> 'YoungModulus1' 200e9;
+@MaterialProperty<constant> 'YoungModulus2' 100e9;
+@MaterialProperty<constant> 'YoungModulus3' 50e9;
+@MaterialProperty<constant> 'PoissonRatio12' 0.3;
+@MaterialProperty<constant> 'PoissonRatio23' 0.2;
+@MaterialProperty<constant> 'PoissonRatio13' 0.25;
+@MaterialProperty<constant> 'ShearModulus12' 40e9;
+@MaterialProperty<constant> 'ShearModulus23' 30e9;
+@MaterialProperty<constant> 'ShearModulus13' 35e9;
+@ExternalStateVariable 'Temperature' 293.15;
+@Real 'a' 0.52359877559829887;
+@RotationMatrix<Direction> {{'cos(a)', 'sin(a)', 0}, {'-sin(a)', 'cos(a)', 0}};
+@ImposedStrain 'EXX' {0:0, 1:1e-3};
+@Times {0, 1 in 5};

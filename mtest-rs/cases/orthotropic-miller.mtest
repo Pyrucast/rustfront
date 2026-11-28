@@ -1,0 +1,17 @@
+// Uniaxial tension of the orthotropic elasticity test behaviour, its third
+// material axis along the Miller indices {1, 2, 3}.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'OrthotropicElasticity';
+@MaterialProperty<constant> 'YoungModulus1' 200e9;
+@MaterialProperty<constant> 'YoungModulus2' 100e9;
+@MaterialProperty<constant> 'YoungModulus3' 50e9;
+@MaterialProperty<constant> 'PoissonRatio12' 0.3;
+@MaterialProperty<constant> 'PoissonRatio23' 0.2;
+@MaterialProperty<constant> 'PoissonRatio13' 0.25;
+@MaterialProperty<constant> 'ShearModulus12' 40e9;
+@MaterialProperty<constant> 'ShearModulus23' 30e9;
+@MaterialProperty<constant> 'ShearModulus13' 35e9;
+@ExternalStateVariable 'Temperature' 293.15;
+@RotationMatrix<Miller> {1, 2, 3};
+@ImposedStrain 'EXX' {0:0, 1:1e-3};
+@Times {0, 1 in 5};

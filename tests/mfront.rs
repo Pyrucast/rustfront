@@ -8,9 +8,9 @@ use std::sync::OnceLock;
 
 use rustfront::voigt::{self, Shear};
 use rustfront::{
-    Behaviour, Error, FinalState, FiniteStrainTangentOperator, Hypothesis, InitialState,
-    MaterialProperty, OutOfBoundsPolicy, ParameterValue, Settings, StressMeasure, Symmetry,
-    TangentOperator, TimeStep, VariableType,
+    Behaviour, Error, FinalState, FiniteStrainTangentOperator, Frame, Hypothesis, InitialState,
+    MaterialProperty, OutOfBoundsPolicy, ParameterValue, Rotation, Settings, StressMeasure,
+    Symmetry, TangentOperator, TimeStep, VariableType,
 };
 
 const YOUNG: f64 = 200e9;
@@ -919,4 +919,268 @@ fn finite_strain_settings_are_refused_for_small_strain_behaviours() {
         matches!(refused, Err(Error::FiniteStrainSettings { .. })),
         "{refused:?}"
     );
+}
+
+/// A rotation of no particular symmetry, and its first material axis.
+fn oblique() -> (Rotation, [f64; 3]) {
+    let axis = [1.0, 2.0, 0.5];
+    let norm = (1.0_f64 + 4.0 + 0.25).sqrt();
+    let r = Rotation::from_axes(axis, [0.0, 1.0, 3.0]).unwrap();
+    (r, axis.map(|x| x / norm))
+}
+
+/// The components of a⊗a: as a symmetric tensor (with TFEL's √2 on the
+/// shear) or as an unsymmetric one, in 3D.
+fn dyad(a: [f64; 3], symmetric: bool) -> Vec<f64> {
+    if symmetric {
+        let r = 2_f64.sqrt();
+        vec![
+            a[0] * a[0],
+            a[1] * a[1],
+            a[2] * a[2],
+            r * a[0] * a[1],
+            r * a[0] * a[2],
+            r * a[1] * a[2],
+        ]
+    } else {
+        vec![
+            a[0] * a[0],
+            a[1] * a[1],
+            a[2] * a[2],
+            a[0] * a[1],
+            a[1] * a[0],
+            a[0] * a[2],
+            a[2] * a[0],
+            a[1] * a[2],
+            a[2] * a[1],
+        ]
+    }
+}
+
+/// Checks that `found` is `expected`, up to `tolerance`.
+fn assert_all_close(found: &[f64], expected: &[f64], tolerance: f64) {
+    assert_eq!(found.len(), expected.len());
+    for (f, e) in found.iter().zip(expected) {
+        assert!((f - e).abs() <= tolerance, "{found:?}\n{expected:?}");
+    }
+}
+
+#[test]
+fn rotations_take_the_material_axes_as_columns() {
+    let behaviour = load(
+        "OrthotropicElasticity",
+        Hypothesis::Tridimensional,
+        &Settings::default(),
+    )
+    .unwrap();
+    assert_eq!(behaviour.description().symmetry, Symmetry::Orthotropic);
+    let (r, a) = oblique();
+    // A strain along the first material axis a, in the global frame, is
+    // along the first axis in the material frame.
+    let mut eps: Vec<f64> = dyad(a, true).iter().map(|x| 1e-3 * x).collect();
+    behaviour
+        .rotate_gradients(&r, Frame::Material, &mut eps)
+        .unwrap();
+    assert_all_close(&eps, &[1e-3, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-18);
+    // A stress along the first material axis is along a in the global frame,
+    let mut sig = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    behaviour
+        .rotate_thermodynamic_forces(&r, Frame::Global, &mut sig)
+        .unwrap();
+    assert_all_close(&sig, &dyad(a, true), 1e-15);
+    // and a tangent operator 11-11 is (a⊗a)⊗(a⊗a).
+    let mut k = [0.0; 36];
+    k[0] = 1.0;
+    behaviour
+        .rotate_tangent_operator(&r, Frame::Global, &mut k)
+        .unwrap();
+    let t = dyad(a, true);
+    let expected: Vec<f64> = t
+        .iter()
+        .flat_map(|ti| t.iter().map(move |tj| ti * tj))
+        .collect();
+    assert_all_close(&k, &expected, 1e-15);
+
+    // In plane strain, a rotation about z.
+    let behaviour = load(
+        "OrthotropicElasticity",
+        Hypothesis::PlaneStrain,
+        &Settings::default(),
+    )
+    .unwrap();
+    let (s, c) = 30_f64.to_radians().sin_cos();
+    let r = Rotation::from_axes([c, s, 0.0], [-s, c, 0.0]).unwrap();
+    let mut eps = [c * c, s * s, 0.0, 2_f64.sqrt() * c * s].map(|x| 1e-3 * x);
+    behaviour
+        .rotate_gradients(&r, Frame::Material, &mut eps)
+        .unwrap();
+    assert_all_close(&eps, &[1e-3, 0.0, 0.0, 0.0], 1e-18);
+}
+
+#[test]
+fn rotations_go_back_and_forth_for_many_points() {
+    let behaviour = load(
+        "OrthotropicElasticity",
+        Hypothesis::Tridimensional,
+        &Settings::default(),
+    )
+    .unwrap();
+    let r = Rotation::from_axes([1.0, 2.0, 0.5], [0.0, 1.0, 3.0]).unwrap();
+    // Two points: rotating them together or one by one gives the same, and
+    // rotating back gives the values again.
+    let values: Vec<f64> = (0..72).map(|i| f64::from(i).sin()).collect();
+    for (rotate, size) in [
+        (
+            Behaviour::rotate_gradients as fn(&Behaviour, &Rotation, Frame, &mut [f64]) -> _,
+            6,
+        ),
+        (Behaviour::rotate_thermodynamic_forces, 6),
+        (Behaviour::rotate_tangent_operator, 36),
+    ] {
+        let original = &values[..2 * size];
+        let mut both = original.to_vec();
+        rotate(&behaviour, &r, Frame::Material, &mut both).unwrap();
+        let mut first = original[..size].to_vec();
+        let mut second = original[size..].to_vec();
+        rotate(&behaviour, &r, Frame::Material, &mut first).unwrap();
+        rotate(&behaviour, &r, Frame::Material, &mut second).unwrap();
+        assert_eq!(both, [first, second].concat());
+        assert_ne!(both, original);
+        rotate(&behaviour, &r, Frame::Global, &mut both).unwrap();
+        for (found, expected) in both.iter().zip(original) {
+            assert!((found - expected).abs() < 1e-14, "{found} {expected}");
+        }
+    }
+}
+
+#[test]
+fn finite_strain_rotations_follow_the_settings() {
+    for (stress_measure, finite_strain_tangent_operator) in [
+        (
+            StressMeasure::Cauchy,
+            FiniteStrainTangentOperator::CauchyByDeformationGradient,
+        ),
+        (
+            StressMeasure::SecondPiolaKirchhoff,
+            FiniteStrainTangentOperator::SecondPiolaKirchhoffByGreenLagrange,
+        ),
+        (
+            StressMeasure::FirstPiolaKirchhoff,
+            FiniteStrainTangentOperator::FirstPiolaKirchhoffByDeformationGradient,
+        ),
+        (
+            StressMeasure::Cauchy,
+            FiniteStrainTangentOperator::KirchhoffBySpatialIncrement,
+        ),
+    ] {
+        let settings = Settings {
+            stress_measure,
+            finite_strain_tangent_operator,
+            ..Default::default()
+        };
+        let behaviour = load(
+            "OrthotropicSaintVenantKirchhoff",
+            Hypothesis::Tridimensional,
+            &settings,
+        )
+        .unwrap();
+        let (r, a) = oblique();
+        // A stretch along the first material axis a, F = I + (l - 1) a⊗a in
+        // the global frame, is along the first axis in the material frame.
+        let l = 1.1;
+        let mut f: Vec<f64> = IDENTITY
+            .iter()
+            .zip(dyad(a, false))
+            .map(|(i, d)| i + (l - 1.0) * d)
+            .collect();
+        behaviour
+            .rotate_gradients(&r, Frame::Material, &mut f)
+            .unwrap();
+        assert_all_close(&f, &[l, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-15);
+        // The stress measure: a symmetric tensor, but the first
+        // Piola-Kirchhoff stress. Along the first material axis, it is along
+        // a in the global frame.
+        let d = behaviour.description();
+        let rows = d.thermodynamic_forces.size;
+        let mut forces = vec![0.0; rows];
+        forces[0] = 1.0;
+        behaviour
+            .rotate_thermodynamic_forces(&r, Frame::Global, &mut forces)
+            .unwrap();
+        assert_all_close(&forces, &dyad(a, rows == 6), 1e-15);
+        // The tangent operator: the derivative of a symmetric tensor, but
+        // with dPK1/dF, with respect to a symmetric tensor for dS/dE, to F
+        // (or its increment) otherwise. 11-11 in the material frame is
+        // (a⊗a)⊗(a⊗a) in the global one.
+        let mut k = vec![0.0; d.tangent_operator_size];
+        k[0] = 1.0;
+        behaviour
+            .rotate_tangent_operator(&r, Frame::Global, &mut k)
+            .unwrap();
+        let (of, with_respect_to) = (dyad(a, k.len() != 81), dyad(a, k.len() == 36));
+        let expected: Vec<f64> = of
+            .iter()
+            .flat_map(|o| with_respect_to.iter().map(move |w| o * w))
+            .collect();
+        assert_all_close(&k, &expected, 1e-15);
+    }
+}
+
+#[test]
+fn rotations_are_refused_when_unavailable() {
+    let (r, _) = oblique();
+    let isotropic = load(
+        "Elasticity",
+        Hypothesis::Tridimensional,
+        &Settings::default(),
+    )
+    .unwrap();
+    let refused = isotropic.rotate_gradients(&r, Frame::Material, &mut [0.0; 6]);
+    assert!(
+        matches!(refused, Err(Error::NotOrthotropic { .. })),
+        "{refused:?}"
+    );
+    let vectors = load(
+        "OrthotropicHeatConduction",
+        Hypothesis::Tridimensional,
+        &Settings::default(),
+    )
+    .unwrap();
+    let refused = vectors.rotate_gradients(&r, Frame::Material, &mut [0.0; 3]);
+    assert!(
+        matches!(&refused, Err(Error::UnsupportedRotation { variable, .. }) if variable == "TemperatureGradient"),
+        "{refused:?}"
+    );
+    let orthotropic = load(
+        "OrthotropicElasticity",
+        Hypothesis::Tridimensional,
+        &Settings::default(),
+    )
+    .unwrap();
+    let refused = orthotropic.rotate_thermodynamic_forces(&r, Frame::Global, &mut [0.0; 7]);
+    assert!(
+        matches!(
+            refused,
+            Err(Error::IncompletePoint {
+                size: 6,
+                found: 7,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    let invalid = [
+        Rotation::new([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 1.0]]),
+        Rotation::new([[1.0, 0.0, 0.0], [0.6, 0.8, 0.0], [0.0, 0.0, 1.0]]),
+        Rotation::new([[f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        Rotation::from_axes([0.0; 3], [0.0, 1.0, 0.0]),
+        Rotation::from_axes([1.0, 1.0, 0.0], [2.0, 2.0, 0.0]),
+    ];
+    for refused in invalid {
+        assert!(
+            matches!(refused, Err(Error::InvalidRotation { .. })),
+            "{refused:?}"
+        );
+    }
+    assert!(Rotation::new([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]).is_ok());
 }

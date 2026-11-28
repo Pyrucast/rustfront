@@ -1,0 +1,22 @@
+@DSL DefaultFiniteStrain;
+@Behaviour OrthotropicSaintVenantKirchhoff;
+@Author rustfront contributors;
+@Description {
+  The orthotropic Saint Venant-Kirchhoff hyperelastic law, written for the
+  tests of rustfront: S = D : E, E being the Green-Lagrange strain, S the
+  second Piola-Kirchhoff stress and D the stiffness tensor built from the
+  nine elastic constants, in the material frame.
+}
+
+@OrthotropicBehaviour;
+@RequireStiffnessTensor;
+
+@Integrator {
+  const auto e = computeGreenLagrangeTensor(F1);
+  const auto S = D * e;
+  sig = convertSecondPiolaKirchhoffStressToCauchyStress(S, F1);
+}
+
+@TangentOperator<DS_DEGL> {
+  Dt = D;
+}

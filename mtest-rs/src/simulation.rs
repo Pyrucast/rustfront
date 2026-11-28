@@ -3,8 +3,8 @@
 //! stresses of the free components reach the imposed ones (zero by default).
 
 use rustfront::{
-    Behaviour, FinalState, Hypothesis, InitialState, MaterialProperty, TangentOperator, TimeStep,
-    VariableType,
+    Behaviour, FinalState, Frame, Hypothesis, InitialState, MaterialProperty, TangentOperator,
+    TimeStep, VariableType,
 };
 
 use crate::input::{Evolution, Imposed, Test};
@@ -306,9 +306,24 @@ pub fn run(
         let mut iterations = 0;
         let outcome = loop {
             iterations += 1;
+            // An orthotropic behaviour integrates in its material frame, as
+            // in MTest: the gradients and the stress at the beginning of the
+            // step are rotated to it, the stress and the tangent operator it
+            // computes back to the global frame. The internal state variables
+            // stay in the material frame.
+            let (mut g0, mut g1, mut sig0) = (u0[..n].to_vec(), u1[..n].to_vec(), stress0.clone());
+            if let Some(r) = &test.rotation {
+                behaviour
+                    .rotate_gradients(r, Frame::Material, &mut g0)
+                    .and_then(|()| behaviour.rotate_gradients(r, Frame::Material, &mut g1))
+                    .and_then(|()| {
+                        behaviour.rotate_thermodynamic_forces(r, Frame::Material, &mut sig0)
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
             let s0 = InitialState {
-                gradients: &u0[..n],
-                thermodynamic_forces: &stress0,
+                gradients: &g0,
+                thermodynamic_forces: &sig0,
                 material_properties: &material0,
                 internal_state_variables: &isv0,
                 external_state_variables: &external0,
@@ -316,7 +331,7 @@ pub fn run(
                 dissipated_energy,
             };
             let mut s1 = FinalState {
-                gradients: &u1[..n],
+                gradients: &g1,
                 thermodynamic_forces: &mut stress1,
                 material_properties: &material1,
                 internal_state_variables: &mut isv1,
@@ -332,6 +347,12 @@ pub fn run(
                 Ok(integration) => integration,
                 Err(e) => break Err(e.to_string()),
             };
+            if let Some(r) = &test.rotation {
+                behaviour
+                    .rotate_thermodynamic_forces(r, Frame::Global, &mut stress1)
+                    .and_then(|()| behaviour.rotate_tangent_operator(r, Frame::Global, &mut k))
+                    .map_err(|e| e.to_string())?;
+            }
             // Nothing to solve, as for a point-wise model: MTest integrates
             // once, without Newton iterations.
             if unknowns == 0 {

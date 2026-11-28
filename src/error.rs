@@ -135,6 +135,34 @@ pub enum Error {
         /// The length given.
         found: usize,
     },
+    /// An array given to [`crate::Behaviour::rotate_gradients`] or its
+    /// siblings does not hold whole points.
+    IncompletePoint {
+        /// The array: `gradients`, `thermodynamic forces` or `tangent operator`.
+        array: &'static str,
+        /// The size of one point.
+        size: usize,
+        /// The length given.
+        found: usize,
+    },
+    /// The behaviour is isotropic: it exports no rotation, and needs none.
+    NotOrthotropic {
+        /// The behaviour.
+        name: String,
+    },
+    /// A variable to rotate is a vector, which the rotations TFEL 5.1
+    /// generates do not support: they would end the process.
+    UnsupportedRotation {
+        /// The behaviour.
+        name: String,
+        /// The vector.
+        variable: String,
+    },
+    /// The matrix given to [`crate::Rotation`] is not a rotation.
+    InvalidRotation {
+        /// What is wrong with it.
+        reason: &'static str,
+    },
     /// The behaviour failed to integrate. The state at the end of the time
     /// step is meaningless.
     IntegrationFailed {
@@ -247,6 +275,18 @@ impl fmt::Display for Error {
                 expected,
                 found,
             } => write!(f, "`{array}` has {found} values, {expected} expected"),
+            Error::IncompletePoint { array, size, found } => write!(
+                f,
+                "`{array}` has {found} values, not a multiple of {size}, the size of one point"
+            ),
+            Error::NotOrthotropic { name } => {
+                write!(f, "`{name}` is isotropic: it has no rotation")
+            }
+            Error::UnsupportedRotation { name, variable } => write!(
+                f,
+                "`{name}` cannot rotate `{variable}`: the rotation of vectors is not supported"
+            ),
+            Error::InvalidRotation { reason } => write!(f, "not a rotation matrix: {reason}"),
             Error::IntegrationFailed {
                 message,
                 time_step_scaling_factor,
