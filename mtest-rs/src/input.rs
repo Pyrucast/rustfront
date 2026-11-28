@@ -56,6 +56,9 @@ pub struct Test {
     /// the identity as the behaviour.
     pub initial_gradients: Option<Vec<f64>>,
     pub initial_stress: Option<Vec<f64>>,
+    /// `@PredictionPolicy 'LinearPrediction'`: each step starts from the
+    /// extrapolation of the previous one.
+    pub linear_prediction: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -318,6 +321,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
         finite_strain_tangent_operator: FiniteStrainTangentOperator::CauchyByDeformationGradient,
         initial_gradients: None,
         initial_stress: None,
+        linear_prediction: false,
     };
     // The evolutions declared so far, usable in the expressions: by `@Real`,
     // `@Evolution`, and the material properties and external state
@@ -540,6 +544,18 @@ pub fn parse(source: &str) -> Result<Test, String> {
                 if initial.replace(values).is_some() {
                     return Err(format!("line {line}: the initial values are already given"));
                 }
+            }
+            "@PredictionPolicy" => {
+                test.linear_prediction = match tokens.text()?.as_str() {
+                    "NoPrediction" => false,
+                    "LinearPrediction" => true,
+                    policy => {
+                        return Err(format!(
+                            "line {line}: the prediction policy `{policy}` is not supported \
+                             (`NoPrediction` or `LinearPrediction`)"
+                        ))
+                    }
+                };
             }
             "@Evolution" => {
                 let name = tokens.text()?;

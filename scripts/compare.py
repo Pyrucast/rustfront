@@ -6,7 +6,8 @@ usage: compare.py reference.res candidate.res [--rtol 1e-12] [--atol 0]
 The tolerance of a column is rtol times the largest absolute value of its
 group: all the components of the strain (or of the deformation gradient)
 together, all those of the stress together, all those of an internal state
-variable together, every other column on its own. A free stress component,
+variable together, all the elements of an array (`a[0]`, `a[1]`) together,
+every other column on its own. A free stress component,
 zero up to round-off, is thus compared with the scale of the stresses, not
 with its own noise. The tolerance is at least atol, for a group whose values
 are all zero up to round-off.
@@ -19,6 +20,7 @@ Exit code: 0 when every column agrees, 1 otherwise.
 """
 
 import argparse
+import re
 import sys
 
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -57,7 +59,8 @@ def group(name):
         return name.split("th component of the ", 1)[1].split(" (", 1)[0]
     if " component of internal variable " in name:
         return name.split(" component of ", 1)[1].split(" (", 1)[0]
-    return name
+    array = re.fullmatch(r"(.+)\[\d+\]", name)
+    return array.group(1) if array else name
 
 
 scales = {}

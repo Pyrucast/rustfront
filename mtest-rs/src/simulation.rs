@@ -323,6 +323,9 @@ pub fn run(
     let mut sub_steps = 0;
     // Whether the last attempt moved the state forward, to be written.
     let mut advanced = true;
+    // The unknowns at the beginning of the last step that converged, and its
+    // length: none before the first one.
+    let mut previous: Option<(Vec<f64>, f64)> = None;
     loop {
         if advanced {
             let mut row = vec![t];
@@ -339,8 +342,16 @@ pub fn run(
         let target = (t + dt).min(end);
         let (material0, material1) = (material_values(t)?, material_values(target)?);
         let (external0, external1) = (values(&external, t), values(&external, target));
-        // No prediction: the iterations start from the previous state.
-        let mut u1 = u0.clone();
+        // The iterations start from the previous state, or with a linear
+        // prediction, as MTest, from its extrapolation along the last step.
+        let mut u1 = match &previous {
+            Some((before, length)) if test.linear_prediction => u0
+                .iter()
+                .zip(before)
+                .map(|(u, b)| u + (u - b) * (target - t) / length)
+                .collect(),
+            _ => u0.clone(),
+        };
         let mut stress1 = vec![0.0; m];
         let mut isv1 = isv0.clone();
         let mut iterations = 0;
@@ -521,6 +532,7 @@ pub fn run(
                 } else {
                     println!("from {t} to {target}: {iterations} iteration(s)");
                 }
+                previous = Some((u0, target - t));
                 (u0, stress0, isv0) = (u1, stress1, isv1);
                 (stored_energy, dissipated_energy) =
                     (integration.stored_energy, integration.dissipated_energy);

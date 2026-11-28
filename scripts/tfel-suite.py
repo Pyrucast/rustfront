@@ -134,12 +134,22 @@ def run(case, test, finite_strain, reference, will_fail):
         return "MTest fails", "timeout" if mtest is None else f"exit {mtest}"
     if rs != 0:
         return "mtest-rs fails", message
-    compare, _ = execute(
-        [sys.executable, "-I", str(root / "scripts" / "compare.py"), "--atol", "1e-20", f"{case}.res", f"{case}-rs.res"]
-    )
-    # The MTest of TFEL 5.1 assembles a finite strain residual of its own:
-    # with a loose criterion, both stop at different points.
-    return ("agree", "") if compare == 0 else ("differ", "finite strain" if finite_strain else "")
+    def compare(rtol):
+        command = [sys.executable, "-I", str(root / "scripts" / "compare.py"), "--rtol", rtol, "--atol", "1e-20"]
+        return execute([*command, f"{case}.res", f"{case}-rs.res"])[0] == 0
+
+    if compare("1e-12"):
+        return "agree", ""
+    # A behaviour with a numerical Jacobian amplifies the round-off.
+    if compare("1e-9"):
+        return "agree to 1e-9", ""
+    # Two mistakes of the MTest of TFEL 5.1 in finite strain: it converts the
+    # Piola-Kirchhoff stress of an orthotropic behaviour with the deformation
+    # gradient of the global frame, and assembles a residual of its own,
+    # which, with a loose criterion, stops it at another point.
+    if finite_strain and finite_strain[0] != "CAUCHY" and "@RotationMatrix" in text:
+        return "differ", "Piola-Kirchhoff stress of a rotated behaviour"
+    return "differ", "finite strain" if finite_strain else ""
 
 
 print(f"== Running {len(runs)} cases with MTest and mtest-rs ({args.jobs} at a time)")

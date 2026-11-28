@@ -67,6 +67,7 @@ be imposed, usually all six off-diagonal components to zero.
 | `@OutputFile`, `@OutputFilePrecision` | 6 digits by default |
 | `@StrainEpsilon`, `@StressEpsilon` | `1e-12` and `1e-3` by default; also `@DeformationGradientEpsilon`, `@DrivingVariableEpsilon`, `@GradientEpsilon`, `@ThermodynamicForceEpsilon` |
 | `@MaximumNumberOfIterations`, `@MaximumNumberOfSubSteps` | `100` and `10` by default |
+| `@PredictionPolicy` | `'NoPrediction'` by default, or `'LinearPrediction'` |
 | `@Author`, `@Date`, `@Description` | ignored |
 | `@Test`, `@XMLOutputFile` | read and ignored: no check of the results, no XML report |
 
@@ -101,7 +102,9 @@ The same as MTest's default one, so that both give the same results:
 - the unknowns are the strain (or deformation gradient) components and one
   Lagrange multiplier per imposed component, scaled by the largest term of
   the first tangent operator;
-- each step starts from the previous state (no prediction) and is solved by
+- each step starts from the previous state, or with `@PredictionPolicy
+  'LinearPrediction'` from its extrapolation along the last step that
+  converged (all the unknowns, multipliers included), and is solved by
   Newton iterations with the consistent tangent operator;
 - an iteration has converged, never the first one, when its correction of
   the strain and its residual are below `@StrainEpsilon` and
