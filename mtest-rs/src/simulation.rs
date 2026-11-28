@@ -3,10 +3,11 @@
 //! stresses of the free components reach the imposed ones (zero by default).
 
 use rustfront::{
-    Behaviour, FinalState, Frame, Hypothesis, InitialState, MaterialProperty, TangentOperator,
-    TimeStep, VariableType,
+    Behaviour, FinalState, FiniteStrainTangentOperator, Frame, Hypothesis, InitialState,
+    MaterialProperty, StressMeasure, TangentOperator, TimeStep, VariableType,
 };
 
+use crate::finite_strain;
 use crate::input::{Evolution, Imposed, Test};
 
 /// The suffixes of the components of a symmetric tensor, in TFEL's order:
@@ -55,15 +56,21 @@ pub fn run(
         && d.tangent_operator_blocks == [("Stress".to_owned(), "Strain".to_owned())];
     let finite_strain =
         d.gradients.list.len() == 1 && d.gradients.list[0].variable_type == VariableType::Tensor;
+    // Another stress measure or tangent operator than the Cauchy stress and
+    // its derivative is converted to them, as MTest does, but in plane stress.
     if finite_strain
-        && (d.thermodynamic_forces.list[0].name != "Stress"
-            || d.tangent_operator_blocks
-                != [("Stress".to_owned(), "DeformationGradient".to_owned())])
+        && matches!(
+            test.hypothesis,
+            Hypothesis::PlaneStress | Hypothesis::AxisymmetricalGeneralisedPlaneStress
+        )
+        && (test.stress_measure != StressMeasure::Cauchy
+            || test.finite_strain_tangent_operator
+                != FiniteStrainTangentOperator::CauchyByDeformationGradient)
     {
         return Err(format!(
-            "`{}`: mtest-rs does not convert other stress measures and tangent operators \
-             than CAUCHY and DSIG_DF yet",
-            d.name
+            "`{}`: in the {} hypothesis, only the Cauchy stress and its derivative \
+             with respect to the deformation gradient are supported, as in MTest",
+            d.name, test.hypothesis
         ));
     }
     let model = d.gradients.list.is_empty() && d.thermodynamic_forces.list.is_empty();
@@ -74,7 +81,14 @@ pub fn run(
         ));
     }
     // The gradients (strain or deformation gradient), and the stress.
-    let (n, m) = (d.gradients.size, d.thermodynamic_forces.size);
+    // The size of the gradients (strain or deformation gradient) and of the
+    // stress (the Cauchy stress for finite strain).
+    let n = d.gradients.size;
+    let m = if finite_strain {
+        stensor_suffixes(test.hypothesis).len()
+    } else {
+        d.thermodynamic_forces.size
+    };
 
     // The external state variables, in the order of the behaviour.
     if let Some((name, _)) = test.external_state_variables.iter().find(|(name, _)| {
@@ -279,7 +293,7 @@ pub fn run(
         (0..m).map(|i| (i, i)).collect()
     };
     let (mut stored_energy, mut dissipated_energy) = (0.0, 0.0);
-    let mut k = vec![0.0; d.tangent_operator_size];
+    let mut k = vec![0.0; m * n];
     // MTest scales the multipliers by the largest term of the first tangent
     // operator it assembles, and keeps that factor for the whole test.
     let mut normalisation: Option<f64> = None;
@@ -321,7 +335,14 @@ pub fn run(
             // step are rotated to it, the stress and the tangent operator it
             // computes back to the global frame. The internal state variables
             // stay in the material frame.
-            let (mut g0, mut g1, mut sig0) = (u0[..n].to_vec(), u1[..n].to_vec(), stress0.clone());
+            // For finite strain, the stress the behaviour expects, from the
+            // Cauchy stress.
+            let (mut g0, mut g1) = (u0[..n].to_vec(), u1[..n].to_vec());
+            let mut sig0 = if finite_strain {
+                finite_strain::from_cauchy(test.stress_measure, &stress0, &g0)
+            } else {
+                stress0.clone()
+            };
             if let Some(r) = &test.rotation {
                 behaviour
                     .rotate_gradients(r, Frame::Material, &mut g0)
@@ -340,29 +361,47 @@ pub fn run(
                 stored_energy,
                 dissipated_energy,
             };
+            let mut forces = vec![0.0; d.thermodynamic_forces.size];
+            let mut tangent = vec![0.0; d.tangent_operator_size];
             let mut s1 = FinalState {
                 gradients: &g1,
-                thermodynamic_forces: &mut stress1,
+                thermodynamic_forces: &mut forces,
                 material_properties: &material1,
                 internal_state_variables: &mut isv1,
                 external_state_variables: &external1,
             };
-            let tangent = Some((TangentOperator::ConsistentTangent, k.as_mut_slice()));
+            let consistent = Some((TangentOperator::ConsistentTangent, tangent.as_mut_slice()));
             // As MGIS by default: the behaviour may not propose a larger step.
             let step = TimeStep {
                 dt: target - t,
                 max_scaling_factor: 1.0,
             };
-            let integration = match behaviour.integrate(step, &s0, &mut s1, tangent) {
+            let integration = match behaviour.integrate(step, &s0, &mut s1, consistent) {
                 Ok(integration) => integration,
                 Err(e) => break Err(e.to_string()),
             };
             if let Some(r) = &test.rotation {
                 behaviour
-                    .rotate_thermodynamic_forces(r, Frame::Global, &mut stress1)
-                    .and_then(|()| behaviour.rotate_tangent_operator(r, Frame::Global, &mut k))
+                    .rotate_thermodynamic_forces(r, Frame::Global, &mut forces)
+                    .and_then(|()| {
+                        behaviour.rotate_tangent_operator(r, Frame::Global, &mut tangent)
+                    })
                     .map_err(|e| e.to_string())?;
             }
+            // For finite strain, the Cauchy stress and its derivative with
+            // respect to the deformation gradient, MTest's unknowns.
+            (stress1, k) = if finite_strain {
+                finite_strain::to_cauchy(
+                    test.stress_measure,
+                    test.finite_strain_tangent_operator,
+                    &forces,
+                    &tangent,
+                    &u0[..n],
+                    &u1[..n],
+                )
+            } else {
+                (forces, tangent)
+            };
             // Nothing to solve, as for a point-wise model: MTest integrates
             // once, without Newton iterations.
             if unknowns == 0 {

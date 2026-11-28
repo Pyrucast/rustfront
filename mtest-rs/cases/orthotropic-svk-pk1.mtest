@@ -1,0 +1,25 @@
+// orthotropic-svk, the behaviour computing the first Piola-Kirchhoff stress and dP/dF, rotated as such.
+// Uniaxial tension of the orthotropic Saint Venant-Kirchhoff test behaviour,
+// its material axes at 45° about z: FXX is stretched to 1.1, the
+// off-diagonal components are held to zero, FYY and FZZ are free.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'OrthotropicSaintVenantKirchhoff' {stress_measure : PK1, tangent_operator : DPK1_DF};
+@MaterialProperty<constant> 'YoungModulus1' 200e9;
+@MaterialProperty<constant> 'YoungModulus2' 100e9;
+@MaterialProperty<constant> 'YoungModulus3' 50e9;
+@MaterialProperty<constant> 'PoissonRatio12' 0.3;
+@MaterialProperty<constant> 'PoissonRatio23' 0.2;
+@MaterialProperty<constant> 'PoissonRatio13' 0.25;
+@MaterialProperty<constant> 'ShearModulus12' 40e9;
+@MaterialProperty<constant> 'ShearModulus23' 30e9;
+@MaterialProperty<constant> 'ShearModulus13' 35e9;
+@ExternalStateVariable 'Temperature' 293.15;
+@RotationMatrix<Direction> {{1, 1, 0}, {-1, 1, 0}};
+@ImposedDeformationGradient 'FXX' {0:1, 1:1.1};
+@ImposedDeformationGradient 'FXY' 0;
+@ImposedDeformationGradient 'FYX' 0;
+@ImposedDeformationGradient 'FXZ' 0;
+@ImposedDeformationGradient 'FZX' 0;
+@ImposedDeformationGradient 'FYZ' 0;
+@ImposedDeformationGradient 'FZY' 0;
+@Times {0, 1 in 5};

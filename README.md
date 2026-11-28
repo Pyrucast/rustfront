@@ -53,11 +53,11 @@ minimal example, then runs every case of `mtest-rs/cases` with MTest and with
 `scripts/compare.py`, and checks that both make the same number of Newton
 iterations at every step. Everything it writes goes to `target/try`.
 
-The MTest of TFEL 5.1 and before assembles the residual of a finite strain
-behaviour with a mistake in the rows of the shear, fixed in TFEL's master
-branch, which mtest-rs follows: with such an MTest, the finite strain cases
-agree in results, not in iterations, and the case with free shear components
-is compared with MTest's results on the same test with the shear imposed.
+The MTest of TFEL 5.1 and before has two mistakes in finite strain, fixed in
+TFEL's master branch, which mtest-rs follows (see `mtest-rs/README.md`): with
+such an MTest, the finite strain cases agree in results, not in iterations,
+and the two cases it gets wrong are compared with its results on the same
+tests written otherwise.
 
 `scripts/tfel-suite.py <TFEL sources>` goes further: it compiles the test
 behaviours of TFEL's generic interface from a checkout of the TFEL sources

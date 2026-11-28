@@ -10,6 +10,7 @@
 //! ```
 
 mod expression;
+mod finite_strain;
 mod input;
 mod simulation;
 

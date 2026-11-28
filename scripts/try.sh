@@ -41,17 +41,22 @@ echo "== Building mtest-rs"
 cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p mtest-rs
 mtest_rs="${CARGO_TARGET_DIR:-$root/target}/release/mtest-rs"
 
-# The MTest of TFEL 5.1 and before assembles the residual of a finite strain
-# behaviour with the diagonal of the stress in the rows of the shear (fixed in
-# TFEL's master branch). With imposed shear components, it gives the same
-# results as mtest-rs, which assembles it right, in one more iteration: the
-# iterations of the finite strain cases are not compared. It cannot solve a
-# free shear component: svk-free-shear is compared with its results on
-# svk-tension, the same test with the shear imposed.
+# The MTest of TFEL 5.1 and before has two mistakes in finite strain, both
+# fixed in TFEL's master branch, which mtest-rs follows:
+# - it assembles the residual with the diagonal of the stress in the rows of
+#   the shear. With imposed shear components, it gives the same results as
+#   mtest-rs in one more iteration: the iterations of the finite strain cases
+#   are not compared. It cannot solve a free shear component: svk-free-shear
+#   is compared with its results on svk-tension, the same test with the shear
+#   imposed;
+# - for an orthotropic behaviour computing a Piola-Kirchhoff stress, it
+#   converts that stress to the Cauchy one with the deformation gradient of
+#   the global frame: orthotropic-svk-pk1 is compared with its results on
+#   orthotropic-svk, the same test with the Cauchy stress.
 tfel_version=$(tfel-config --version | awk '{print $2}')
-old_finite_strain_residual=0
+declare -A old_mtest_reference=()
 if [ "$(printf '%s\n' "$tfel_version" 5.2 | sort -V | head -n 1)" != 5.2 ]; then
-    old_finite_strain_residual=1
+    old_mtest_reference=([svk-free-shear]=svk-tension [orthotropic-svk-pk1]=orthotropic-svk)
 fi
 
 failed=()
@@ -60,9 +65,9 @@ for case in "$root"/mtest-rs/cases/*.mtest; do
     echo
     echo "== $name: MTest, then mtest-rs"
     reference=$case
-    if [ "$old_finite_strain_residual" = 1 ] && [ "$name" = svk-free-shear ]; then
-        reference="$root/mtest-rs/cases/svk-tension.mtest"
-        echo "MTest $tfel_version cannot solve a free shear: compared with its results on svk-tension"
+    if [ -n "${old_mtest_reference[$name]:-}" ]; then
+        reference="$root/mtest-rs/cases/${old_mtest_reference[$name]}.mtest"
+        echo "MTest $tfel_version gets this case wrong: compared with its results on ${old_mtest_reference[$name]}"
     fi
     cp "$reference" "$name.mtest"
     if ! mtest "$name.mtest" > "$name.mtest.log" 2>&1; then
@@ -86,7 +91,7 @@ for case in "$root"/mtest-rs/cases/*.mtest; do
     rs_iterations=$({ grep -o ': [0-9]* iteration' "$name.mtest-rs.log" || true; } | awk '{print $2}' | xargs)
     if [ "$mtest_iterations" = "$rs_iterations" ]; then
         echo "same iterations at every step: ${rs_iterations:-none, nothing to solve}"
-    elif [ "$old_finite_strain_residual" = 1 ] && grep -q '@ImposedDeformationGradient' "$case"; then
+    elif [ "${#old_mtest_reference[@]}" != 0 ] && grep -q '@ImposedDeformationGradient' "$case"; then
         echo "iterations not compared, MTest $tfel_version assembles a finite strain residual of its own:"
         echo "  MTest $mtest_iterations, mtest-rs $rs_iterations"
     else
