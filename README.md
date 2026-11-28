@@ -59,6 +59,12 @@ branch, which mtest-rs follows: with such an MTest, the finite strain cases
 agree in results, not in iterations, and the case with free shear components
 is compared with MTest's results on the same test with the shear imposed.
 
+`scripts/tfel-suite.py <TFEL sources>` goes further: it compiles the test
+behaviours of TFEL's generic interface from a checkout of the TFEL sources
+(the version of the TFEL in the `PATH`), runs each of their MTest tests with
+MTest and with mtest-rs, and reports which ones agree, and why mtest-rs fails
+on the others. Everything it writes goes to `target/tfel-suite`.
+
 ## Minimal example
 
 [`examples/minimal.rs`](examples/minimal.rs) loads a behaviour, prints its

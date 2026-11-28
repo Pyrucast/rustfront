@@ -53,9 +53,19 @@ pub fn run(
     let small_strain = d.gradients.list.len() == 1
         && d.gradients.list[0].variable_type == VariableType::Stensor
         && d.tangent_operator_blocks == [("Stress".to_owned(), "Strain".to_owned())];
-    let finite_strain = d.gradients.list.len() == 1
-        && d.gradients.list[0].variable_type == VariableType::Tensor
-        && d.tangent_operator_blocks == [("Stress".to_owned(), "DeformationGradient".to_owned())];
+    let finite_strain =
+        d.gradients.list.len() == 1 && d.gradients.list[0].variable_type == VariableType::Tensor;
+    if finite_strain
+        && (d.thermodynamic_forces.list[0].name != "Stress"
+            || d.tangent_operator_blocks
+                != [("Stress".to_owned(), "DeformationGradient".to_owned())])
+    {
+        return Err(format!(
+            "`{}`: mtest-rs does not convert other stress measures and tangent operators \
+             than CAUCHY and DSIG_DF yet",
+            d.name
+        ));
+    }
     let model = d.gradients.list.is_empty() && d.thermodynamic_forces.list.is_empty();
     if !small_strain && !finite_strain && !model {
         return Err(format!(

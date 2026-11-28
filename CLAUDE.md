@@ -28,7 +28,9 @@ independent reimplementation of a subset of MTest built on it.
 - `tests/behaviours/*.mfront`: test behaviours written for this repository.
   Do not copy TFEL's own test behaviours: their licence is not ours.
 - `scripts/`: `check.sh` (the checks of the CI), `try.sh` (mtest-rs against
-  MTest), `compare.py`, `install-tfel.sh`.
+  MTest), `compare.py`, `install-tfel.sh`, `tfel-suite.py` (mtest-rs against
+  MTest on the tests of TFEL's generic interface, read from a checkout of the
+  TFEL sources: nothing of TFEL is copied here).
 
 Both crates share one version, declared in the root `Cargo.toml`
 (`[workspace.package]` and the `rustfront` entry of `[workspace.dependencies]`).

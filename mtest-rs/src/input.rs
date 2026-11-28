@@ -1,6 +1,9 @@
 //! Reading `.mtest` files: the subset of MTest's syntax listed in the README.
 
-use rustfront::{Hypothesis, OutOfBoundsPolicy, ParameterValue, Rotation};
+use rustfront::{
+    FiniteStrainTangentOperator, Hypothesis, OutOfBoundsPolicy, ParameterValue, Rotation,
+    StressMeasure,
+};
 
 use crate::expression::Expression;
 
@@ -71,6 +74,10 @@ pub struct Test {
     /// The material frame of an orthotropic behaviour: `None` when it is the
     /// global frame.
     pub rotation: Option<Rotation>,
+    /// The options of a finite strain behaviour: `{stress_measure : PK1,
+    /// tangent_operator : DS_DEGL}` after its name.
+    pub stress_measure: StressMeasure,
+    pub finite_strain_tangent_operator: FiniteStrainTangentOperator,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -141,8 +148,21 @@ impl Tokens {
         }
     }
 
-    /// A number, a table `{t:v, …}`, or with the `function` option an
-    /// expression of `t`.
+    /// A value: a number, or as MTest reads it a quoted expression of the
+    /// constants (`@Real`, and the material properties and external state
+    /// variables given a constant value).
+    fn value(&mut self, constants: &[(String, f64)]) -> Result<f64, String> {
+        match self.next()? {
+            (Token::Number(value), _) => Ok(value),
+            (Token::Text(text), line) => Ok(Expression::parse(&text, constants)
+                .map_err(|e| format!("line {line}: {e}"))?
+                .value(0.0)),
+            (token, line) => Err(format!("line {line}: expected a value, found {token:?}")),
+        }
+    }
+
+    /// A value, a table `{t:v, …}` of values, or with the `function` option
+    /// an expression of `t`.
     fn evolution(
         &mut self,
         option: Option<&str>,
@@ -155,12 +175,19 @@ impl Tokens {
             (None | Some("evolution" | "constant"), (Token::Number(value), _)) => {
                 Ok(Evolution::Constant(value))
             }
+            (None | Some("evolution" | "constant"), (Token::Text(text), line)) => {
+                Ok(Evolution::Constant(
+                    Expression::parse(&text, constants)
+                        .map_err(|e| format!("line {line}: {e}"))?
+                        .value(0.0),
+                ))
+            }
             (None | Some("evolution"), (Token::Symbol('{'), line)) => {
                 let mut points: Vec<(f64, f64)> = Vec::new();
                 loop {
-                    let t = self.number()?;
+                    let t = self.value(constants)?;
                     self.symbol(':')?;
-                    let value = self.number()?;
+                    let value = self.value(constants)?;
                     if points.last().is_some_and(|(last, _)| *last >= t) {
                         return Err(format!(
                             "line {line}: the times of an evolution must increase"
@@ -273,6 +300,12 @@ pub fn parse(source: &str) -> Result<Test, String> {
                 if depth != 0 {
                     return Err(format!("line {line}: unterminated `@Description`"));
                 }
+            } else if word == "@Author" || word == "@Date" {
+                // Free text up to the semicolon, skipped here: `@Date 2/09/2015;`.
+                while i < chars.len() && chars[i] != ';' {
+                    line += usize::from(chars[i] == '\n');
+                    i += 1;
+                }
             } else if c == '@' {
                 list.push((Token::Keyword(word), line));
             } else {
@@ -307,6 +340,8 @@ pub fn parse(source: &str) -> Result<Test, String> {
         maximum_iterations: 100,
         maximum_sub_steps: 10,
         rotation: None,
+        stress_measure: StressMeasure::Cauchy,
+        finite_strain_tangent_operator: FiniteStrainTangentOperator::CauchyByDeformationGradient,
     };
     // The values declared by `@Real`, usable in the expressions.
     let mut constants: Vec<(String, f64)> = Vec::new();
@@ -338,21 +373,15 @@ pub fn parse(source: &str) -> Result<Test, String> {
             "@ImposedStrain",
             "@ImposedStress",
             "@ImposedDeformationGradient",
+            "@ImposedDrivingVariable",
+            "@ImposedGradient",
+            "@ImposedThermodynamicForce",
             "@RotationMatrix",
+            "@Test",
         ];
         if option.is_some() && !with_option.contains(&keyword.as_str()) {
             return Err(format!("line {line}: `{keyword}` takes no option"));
         }
-        // A value: a number, or an expression of the `@Real` constants.
-        let value = |tokens: &mut Tokens, constants: &[(String, f64)]| -> Result<f64, String> {
-            match tokens.next()? {
-                (Token::Number(value), _) => Ok(value),
-                (Token::Text(text), line) => Ok(Expression::parse(&text, constants)
-                    .map_err(|e| format!("line {line}: {e}"))?
-                    .value(0.0)),
-                (token, line) => Err(format!("line {line}: expected a value, found {token:?}")),
-            }
-        };
         // An integer parameter: a whole positive number.
         let count = |tokens: &mut Tokens| -> Result<usize, String> {
             let value = tokens.number()?;
@@ -371,7 +400,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
                     .map_err(|e: rustfront::Error| format!("line {line}: {e}"))?;
             }
             "@Behaviour" => {
-                if option.as_deref() != Some("generic") {
+                if !matches!(option.as_deref(), Some("generic" | "Generic")) {
                     return Err(format!(
                         "line {line}: only behaviours of the generic interface are supported \
                          (`@Behaviour<generic> 'library' 'behaviour';`)"
@@ -379,6 +408,57 @@ pub fn parse(source: &str) -> Result<Test, String> {
                 }
                 test.library = tokens.text()?;
                 test.behaviour = tokens.text()?;
+                // `{stress_measure : PK1, tangent_operator : DS_DEGL}`, the
+                // names or values quoted or not, as MTest reads them.
+                if tokens.next_if(&Token::Symbol('{')) {
+                    loop {
+                        let word = |tokens: &mut Tokens| match tokens.next()? {
+                            (Token::Word(w) | Token::Text(w), line) => Ok((w, line)),
+                            (token, line) => {
+                                Err(format!("line {line}: expected a name, found {token:?}"))
+                            }
+                        };
+                        let (option, _) = word(&mut tokens)?;
+                        tokens.symbol(':')?;
+                        let (value, line) = word(&mut tokens)?;
+                        match (option.as_str(), value.as_str()) {
+                            ("stress_measure", "CAUCHY" | "CauchyStress") => {
+                                test.stress_measure = StressMeasure::Cauchy;
+                            }
+                            ("stress_measure", "PK2" | "SecondPiolaKirchoffStress") => {
+                                test.stress_measure = StressMeasure::SecondPiolaKirchhoff;
+                            }
+                            ("stress_measure", "PK1" | "FirstPiolaKirchoffStress") => {
+                                test.stress_measure = StressMeasure::FirstPiolaKirchhoff;
+                            }
+                            ("tangent_operator", "DSIG_DF" | "DCAUCHY_DF") => {
+                                test.finite_strain_tangent_operator =
+                                    FiniteStrainTangentOperator::CauchyByDeformationGradient;
+                            }
+                            ("tangent_operator", "DS_DEGL") => {
+                                test.finite_strain_tangent_operator =
+                                    FiniteStrainTangentOperator::SecondPiolaKirchhoffByGreenLagrange;
+                            }
+                            ("tangent_operator", "DPK1_DF") => {
+                                test.finite_strain_tangent_operator =
+                                    FiniteStrainTangentOperator::FirstPiolaKirchhoffByDeformationGradient;
+                            }
+                            ("tangent_operator", "DTAU_DDF") => {
+                                test.finite_strain_tangent_operator =
+                                    FiniteStrainTangentOperator::KirchhoffBySpatialIncrement;
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "line {line}: unknown behaviour option `{option} : {value}`"
+                                ))
+                            }
+                        }
+                        if !tokens.next_if(&Token::Symbol(',')) {
+                            break;
+                        }
+                    }
+                    tokens.symbol('}')?;
+                }
             }
             "@MaterialProperty" if option.as_deref() == Some("generic") => {
                 let name = tokens.text()?;
@@ -389,22 +469,34 @@ pub fn parse(source: &str) -> Result<Test, String> {
             "@MaterialProperty" | "@ExternalStateVariable" => {
                 let name = tokens.text()?;
                 let evolution = tokens.evolution(option.as_deref(), &constants)?;
+                // A constant value may be used in the expressions after it,
+                // as in MTest.
+                if let Evolution::Constant(value) = evolution {
+                    constants.push((name.clone(), value));
+                }
                 if keyword == "@MaterialProperty" {
                     test.material_properties.push((name, evolution));
                 } else {
                     test.external_state_variables.push((name, evolution));
                 }
             }
-            "@ImposedStrain" | "@ImposedStress" | "@ImposedDeformationGradient" => {
+            // With their older or more general names.
+            "@ImposedStrain"
+            | "@ImposedStress"
+            | "@ImposedDeformationGradient"
+            | "@ImposedDrivingVariable"
+            | "@ImposedGradient"
+            | "@ImposedThermodynamicForce" => {
                 let component = tokens.text()?;
                 let evolution = tokens.evolution(option.as_deref(), &constants)?;
                 // The gradient (strain or deformation gradient), or the
                 // stress (the Cauchy stress for a finite strain behaviour).
-                let imposed = if keyword == "@ImposedStress" {
-                    Imposed::Stress
-                } else {
-                    Imposed::Strain
-                };
+                let imposed =
+                    if keyword == "@ImposedStress" || keyword == "@ImposedThermodynamicForce" {
+                        Imposed::Stress
+                    } else {
+                        Imposed::Strain
+                    };
                 test.imposed.push((imposed, component, evolution));
             }
             "@InternalStateVariable" => {
@@ -445,7 +537,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
             }
             "@Real" => {
                 let name = tokens.text()?;
-                let value = value(&mut tokens, &constants)?;
+                let value = tokens.value(&constants)?;
                 constants.push((name, value));
             }
             "@RotationMatrix" => {
@@ -457,10 +549,10 @@ pub fn parse(source: &str) -> Result<Test, String> {
                 // `{v1, v2, …}`: `n` values.
                 let list = |tokens: &mut Tokens, n: usize| -> Result<Vec<f64>, String> {
                     tokens.symbol('{')?;
-                    let mut values = vec![value(tokens, &constants)?];
+                    let mut values = vec![tokens.value(&constants)?];
                     for _ in 1..n {
                         tokens.symbol(',')?;
-                        values.push(value(tokens, &constants)?);
+                        values.push(tokens.value(&constants)?);
                     }
                     tokens.symbol('}')?;
                     Ok(values)
@@ -595,16 +687,26 @@ pub fn parse(source: &str) -> Result<Test, String> {
             }
             "@OutputFile" => test.output_file = Some(tokens.text()?),
             "@OutputFilePrecision" => test.output_precision = count(&mut tokens)?,
-            "@StrainEpsilon" => test.strain_epsilon = tokens.number()?,
-            "@StressEpsilon" => test.stress_epsilon = tokens.number()?,
+            "@StrainEpsilon"
+            | "@DeformationGradientEpsilon"
+            | "@DrivingVariableEpsilon"
+            | "@GradientEpsilon" => test.strain_epsilon = tokens.number()?,
+            "@StressEpsilon" | "@ThermodynamicForceEpsilon" => {
+                test.stress_epsilon = tokens.number()?;
+            }
             "@MaximumNumberOfIterations" => test.maximum_iterations = count(&mut tokens)?,
             "@MaximumNumberOfSubSteps" => test.maximum_sub_steps = count(&mut tokens)?,
-            "@Author" | "@Date" => {
-                // Free text up to the semicolon.
+            // The checks of MTest's results: the results of mtest-rs are
+            // compared with MTest's instead.
+            "@Test" => {
                 while !tokens.next_if(&Token::Symbol(';')) {
                     tokens.next()?;
                 }
                 continue;
+            }
+            // No XML report: the file is read and ignored.
+            "@XMLOutputFile" => {
+                tokens.text()?;
             }
             _ => {
                 return Err(format!(
