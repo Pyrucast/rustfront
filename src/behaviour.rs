@@ -693,6 +693,12 @@ impl Behaviour {
     /// The internal state variables are not rotated: they stay in the
     /// material frame.
     ///
+    /// For a finite strain behaviour, `r` is the material frame in the
+    /// reference configuration, constant over time: the deformation gradient
+    /// is rotated on both sides, and the behaviour follows the rotation of
+    /// the material through it. Axes already turned with the material would
+    /// count its rotation twice.
+    ///
     /// # Errors
     ///
     /// [`Error::IncompletePoint`] when `gradients` does not hold whole points,
