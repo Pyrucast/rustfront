@@ -1,0 +1,21 @@
+@DSL MaterialLaw;
+@Law YoungModulusNoParameters;
+@Author rustfront contributors;
+@Description {
+  The material property YoungModulus without parameters, to compare
+  mtest-rs with MTest: with TFEL 5.1, MTest fails at the first evaluation
+  of a material property that has parameters when there is no parameter
+  file in the current directory (looking for it sets `errno`).
+  E = 200e9 (1 - 1e-4 (T - 293.15)).
+}
+
+@Output stress E;
+E.setGlossaryName("YoungModulus");
+@Input temperature T;
+T.setGlossaryName("Temperature");
+@PhysicalBounds T in [0:*[;
+@Bounds T in [200:1000];
+
+@Function {
+  E = 200e9 * (1 - 1e-4 * (T - 293.15));
+}

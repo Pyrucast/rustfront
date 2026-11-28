@@ -1,0 +1,22 @@
+@DSL MaterialLaw;
+@Law YoungModulus;
+@Author rustfront contributors;
+@Description {
+  A material property written for the tests of rustfront: a Young modulus
+  decreasing linearly with the temperature, E = E0 (1 - k (T - 293.15)),
+  with two parameters, bounds and physical bounds on the temperature.
+}
+
+@Output stress E;
+E.setGlossaryName("YoungModulus");
+@Input temperature T;
+T.setGlossaryName("Temperature");
+@PhysicalBounds T in [0:*[;
+@Bounds T in [200:1000];
+
+@Parameter stress E0 = 200e9;
+@Parameter real k = 1e-4;
+
+@Function {
+  E = E0 * (1 - k * (T - 293.15));
+}

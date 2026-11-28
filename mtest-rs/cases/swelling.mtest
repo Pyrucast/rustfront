@@ -1,0 +1,9 @@
+// The Swelling point-wise model: no strain nor stress, an output (an
+// internal state variable) computed from an input (an external state
+// variable), with its parameter set.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'Swelling';
+@Parameter 'coef' 2e-3;
+@ExternalStateVariable 'Temperature' 293.15;
+@ExternalStateVariable 'TestBurnUp' {0:0, 10:20};
+@Times {0, 10 in 5};

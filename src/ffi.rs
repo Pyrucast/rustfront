@@ -73,3 +73,39 @@ pub(crate) type SetUnsignedShortParameterFn = unsafe extern "C" fn(*const c_char
 /// Strict. A static variable of the library too; the function does nothing
 /// when the behaviour forbids changing its policy.
 pub(crate) type SetOutOfBoundsPolicyFn = unsafe extern "C" fn(c_int);
+
+/// `mfront_gmp_OutputStatus` (`MFront/GenericMaterialProperty/OutputStatus.h`):
+/// how the evaluation of a material property went.
+#[repr(C)]
+pub(crate) struct OutputStatus {
+    /// 0: evaluated; 1: evaluated, an input out of its bounds; negative: no
+    /// value (-1 bounds, -2 C++ exception, -3 error of the C library, -4 value
+    /// not finite, -5 wrong number of arguments).
+    pub(crate) status: c_int,
+    /// `errno`, when `status` is -3.
+    pub(crate) c_error_number: c_int,
+    /// The rank, from 1, of an input out of its bounds, 0 when there is none.
+    /// Its sign is not reliable: TFEL 5.1 sets -1 for a bound crossed with
+    /// the strict policy, not only for a physical bound.
+    pub(crate) bounds_status: c_int,
+    /// The message, NUL-terminated.
+    pub(crate) msg: [u8; ERROR_MESSAGE_SIZE],
+}
+
+impl OutputStatus {
+    /// A status before any evaluation.
+    pub(crate) const CLEARED: OutputStatus = OutputStatus {
+        status: 0,
+        c_error_number: 0,
+        bounds_status: 0,
+        msg: [0; ERROR_MESSAGE_SIZE],
+    };
+}
+
+/// `mfront_gmp_real <Name>(mfront_gmp_OutputStatus* const, const
+/// mfront_gmp_real* const, const mfront_gmp_size_type, const
+/// mfront_gmp_OutOfBoundsPolicy)`: the arguments, their number, and the
+/// policy, a C enumeration: 0 None, 1 Warning, 2 Strict. Like the behaviours,
+/// it catches every C++ exception.
+pub(crate) type MaterialPropertyFn =
+    unsafe extern "C" fn(*mut OutputStatus, *const f64, usize, c_int) -> f64;

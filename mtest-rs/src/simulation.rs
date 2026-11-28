@@ -3,7 +3,8 @@
 //! stresses of the free components reach the imposed ones (zero by default).
 
 use rustfront::{
-    Behaviour, FinalState, Hypothesis, InitialState, TangentOperator, TimeStep, VariableType,
+    Behaviour, FinalState, Hypothesis, InitialState, MaterialProperty, TangentOperator, TimeStep,
+    VariableType,
 };
 
 use crate::input::{Evolution, Imposed, Test};
@@ -22,57 +23,118 @@ pub fn stensor_suffixes(hypothesis: Hypothesis) -> &'static [&'static str] {
     }
 }
 
-/// Runs the test. Each row of the result is a line of the output file: the
+/// Runs the test, the material properties `laws` loaded from the libraries
+/// the file names. Each row of the result is a line of the output file: the
 /// time, the strain, the stress, the internal state variables, the stored and
 /// dissipated energies, at the initial time then at the end of each step.
-pub fn run(test: &Test, behaviour: &Behaviour) -> Result<Vec<Vec<f64>>, String> {
+pub fn run(
+    test: &Test,
+    behaviour: &Behaviour,
+    laws: &[(String, MaterialProperty)],
+) -> Result<Vec<Vec<f64>>, String> {
     let d = behaviour.description();
+    // A small strain behaviour, or a point-wise model: no gradient at all.
     let small_strain = d.gradients.list.len() == 1
         && d.gradients.list[0].variable_type == VariableType::Stensor
         && d.tangent_operator_blocks == [("Stress".to_owned(), "Strain".to_owned())];
-    if !small_strain {
-        return Err(format!("`{}` is not a small strain behaviour", d.name));
+    let model = d.gradients.list.is_empty() && d.thermodynamic_forces.list.is_empty();
+    if !small_strain && !model {
+        return Err(format!(
+            "`{}` is neither a small strain behaviour nor a point-wise model",
+            d.name
+        ));
     }
     let n = d.gradients.size;
 
-    // The evolutions of the material properties and external state variables,
-    // in the order of the behaviour.
-    let mut evolutions = Vec::new();
-    for (kind, given, expected) in [
-        (
-            "material property",
-            &test.material_properties,
-            &d.material_properties,
-        ),
-        (
-            "external state variable",
-            &test.external_state_variables,
-            &d.external_state_variables,
-        ),
-    ] {
-        if let Some((name, _)) = given
+    // The external state variables, in the order of the behaviour.
+    if let Some((name, _)) = test.external_state_variables.iter().find(|(name, _)| {
+        !d.external_state_variables
+            .list
             .iter()
-            .find(|(name, _)| !expected.list.iter().any(|v| v.name == *name))
-        {
-            return Err(format!("`{}` has no {kind} `{name}`", d.name));
-        }
-        let mut list = Vec::new();
-        for v in &expected.list {
-            if v.size != 1 {
-                return Err(format!(
-                    "the {kind} `{}` is not a scalar, which is not supported",
-                    v.name
-                ));
-            }
-            let evolution = given
-                .iter()
-                .find(|(name, _)| *name == v.name)
-                .ok_or_else(|| format!("the {kind} `{}` is not given", v.name))?;
-            list.push(&evolution.1);
-        }
-        evolutions.push(list);
+            .any(|v| v.name == *name)
+    }) {
+        return Err(format!(
+            "`{}` has no external state variable `{name}`",
+            d.name
+        ));
     }
-    let (material, external) = (&evolutions[0], &evolutions[1]);
+    let given = |name: &str| {
+        test.external_state_variables
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, evolution)| evolution)
+    };
+    let mut external = Vec::new();
+    for v in &d.external_state_variables.list {
+        if v.size != 1 {
+            return Err(format!(
+                "the external state variable `{}` is not a scalar, which is not supported",
+                v.name
+            ));
+        }
+        external.push(
+            given(&v.name)
+                .ok_or_else(|| format!("the external state variable `{}` is not given", v.name))?,
+        );
+    }
+
+    // The material properties, in the order of the behaviour: an evolution,
+    // or a material property evaluated, as MTest does with the policy None,
+    // at the external state variables named after its inputs.
+    enum Source<'a> {
+        Evolution(&'a Evolution),
+        Law(&'a MaterialProperty, Vec<&'a Evolution>),
+    }
+    let declared = |name: &str| d.material_properties.list.iter().any(|v| v.name == name);
+    let unknown = test
+        .material_properties
+        .iter()
+        .map(|(name, _)| name)
+        .chain(laws.iter().map(|(name, _)| name));
+    if let Some(name) = unknown.into_iter().find(|name| !declared(name)) {
+        return Err(format!("`{}` has no material property `{name}`", d.name));
+    }
+    let mut material = Vec::new();
+    for v in &d.material_properties.list {
+        if let Some((_, evolution)) = test
+            .material_properties
+            .iter()
+            .find(|(name, _)| *name == v.name)
+        {
+            material.push(Source::Evolution(evolution));
+        } else if let Some((_, law)) = laws.iter().find(|(name, _)| *name == v.name) {
+            let inputs = law
+                .description()
+                .inputs
+                .iter()
+                .map(|input| {
+                    given(input).ok_or_else(|| {
+                        format!(
+                            "the input `{input}` of `{}` is not an external state variable",
+                            v.name
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            material.push(Source::Law(law, inputs));
+        } else {
+            return Err(format!("the material property `{}` is not given", v.name));
+        }
+    }
+    let material_values = |t: f64| -> Result<Vec<f64>, String> {
+        material
+            .iter()
+            .map(|source| match source {
+                Source::Evolution(evolution) => Ok(evolution.value(t)),
+                Source::Law(law, inputs) => {
+                    let arguments: Vec<f64> = inputs.iter().map(|e| e.value(t)).collect();
+                    law.evaluate(&arguments)
+                        .map(|e| e.value)
+                        .map_err(|e| e.to_string())
+                }
+            })
+            .collect()
+    };
     let values = |evolutions: &[&Evolution], t: f64| -> Vec<f64> {
         evolutions.iter().map(|e| e.value(t)).collect()
     };
@@ -179,8 +241,8 @@ pub fn run(test: &Test, behaviour: &Behaviour) -> Result<Vec<Vec<f64>>, String> 
         }
         let end = test.times[next];
         let target = (t + dt).min(end);
-        let (material0, material1) = (values(material, t), values(material, target));
-        let (external0, external1) = (values(external, t), values(external, target));
+        let (material0, material1) = (material_values(t)?, material_values(target)?);
+        let (external0, external1) = (values(&external, t), values(&external, target));
         // No prediction: the iterations start from the previous state.
         let mut u1 = u0.clone();
         let mut stress1 = vec![0.0; n];
@@ -214,6 +276,11 @@ pub fn run(test: &Test, behaviour: &Behaviour) -> Result<Vec<Vec<f64>>, String> 
                 Ok(integration) => integration,
                 Err(e) => break Err(e.to_string()),
             };
+            // Nothing to solve, as for a point-wise model: MTest integrates
+            // once, without Newton iterations.
+            if unknowns == 0 {
+                break Ok(integration);
+            }
             let a = *normalisation.get_or_insert_with(|| k.iter().fold(0.0, |m, v| m.max(v.abs())));
 
             // MTest's system: the tangent operator bordered by the imposed
@@ -307,7 +374,11 @@ pub fn run(test: &Test, behaviour: &Behaviour) -> Result<Vec<Vec<f64>>, String> 
         match outcome {
             Ok(integration) => {
                 advanced = true;
-                println!("from {t} to {target}: {iterations} iteration(s)");
+                if unknowns == 0 {
+                    println!("from {t} to {target}: integrated");
+                } else {
+                    println!("from {t} to {target}: {iterations} iteration(s)");
+                }
                 (u0, stress0, isv0) = (u1, stress1, isv1);
                 (stored_energy, dissipated_energy) =
                     (integration.stored_energy, integration.dissipated_energy);

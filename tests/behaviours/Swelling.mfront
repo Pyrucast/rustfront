@@ -1,0 +1,19 @@
+@DSL DefaultModel;
+@Model Swelling;
+@Author rustfront contributors;
+@Description {
+  A point-wise model written for the tests of rustfront: a swelling
+  proportional to a burn-up, s = coef bu. Its output is a state variable,
+  its input an external state variable, after the temperature.
+}
+
+@StateVariable real s;
+s.setEntryName("TestSwelling");
+@ExternalStateVariable real bu;
+bu.setEntryName("TestBurnUp");
+
+@Parameter real coef = 1e-3;
+
+@Integrator {
+  ds = coef * dbu;
+}

@@ -13,6 +13,11 @@ independent reimplementation of a subset of MTest built on it.
   - `behaviour.rs`: `Behaviour::load` reads and checks the exported symbols
     (`<behaviour>_<hypothesis>_<name>`, else `<behaviour>_<name>`);
     `Behaviour::integrate` checks every array length, then calls the behaviour.
+  - `material_property.rs`: `MaterialProperty::load` and `evaluate`, for the
+    material properties (`@DSL MaterialLaw`), whose C interface differs.
+  - `symbols.rs`: the private `Symbols` helper shared by both loaders: the
+    only place that looks symbols up, with typed reads, each `unsafe` block
+    justified once.
   - `voigt.rs`: conversions between TFEL's storage of symmetric tensors
     (`xx, yy, zz, √2·xy, √2·xz, √2·yz`) and Voigt notation.
 - `mtest-rs/`: the command line tool; it follows MTest's default algorithm

@@ -20,7 +20,17 @@ case "$check" in
     compare) ./scripts/try.sh ;;
     # Packages both crates and compiles them as crates.io will, mtest-rs
     # against the packaged rustfront. A dry run: uncommitted changes allowed.
-    package) cargo publish --workspace --dry-run --allow-dirty ;;
+    # Cargo keeps the crates it unpacked from its temporary local registry
+    # (`registry/src/-<hash>/`), and what it compiled from them, and reuses
+    # both while the version does not change: mtest-rs would be checked
+    # against an older rustfront. Hence those unpacked crates removed, and a
+    # fresh target directory.
+    package)
+        rm -rf "${CARGO_HOME:-$HOME/.cargo}"/registry/src/-*/{rustfront,mtest-rs}-*
+        target=$(mktemp -d)
+        trap 'rm -rf "$target"' EXIT
+        CARGO_TARGET_DIR="$target" cargo publish --workspace --dry-run --allow-dirty
+        ;;
     # The minimum Rust version is read where it is declared.
     msrv)
         version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^rust-version = "\(.*\)"/\1/p' Cargo.toml)

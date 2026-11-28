@@ -61,11 +61,12 @@ for case in "$root"/mtest-rs/cases/*.mtest; do
         continue
     fi
     # Both follow the same algorithm: the same number of Newton iterations at
-    # every step.
-    mtest_iterations=$(grep -o 'after [0-9]* iterations' "$name.mtest.log" | awk '{print $2}' | xargs)
-    rs_iterations=$(grep -o ': [0-9]* iteration' "$name.mtest-rs.log" | awk '{print $2}' | xargs)
+    # every step, and none at all for a point-wise model (grep then finds
+    # nothing, which must not stop the script).
+    mtest_iterations=$({ grep -o 'after [0-9]* iterations' "$name.mtest.log" || true; } | awk '{print $2}' | xargs)
+    rs_iterations=$({ grep -o ': [0-9]* iteration' "$name.mtest-rs.log" || true; } | awk '{print $2}' | xargs)
     if [ "$mtest_iterations" = "$rs_iterations" ]; then
-        echo "same iterations at every step: $rs_iterations"
+        echo "same iterations at every step: ${rs_iterations:-none, nothing to solve}"
     else
         echo "iterations differ: MTest $mtest_iterations, mtest-rs $rs_iterations"
         failed+=("$name")

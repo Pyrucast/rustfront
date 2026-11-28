@@ -16,7 +16,7 @@ mod simulation;
 use std::path::Path;
 use std::process::ExitCode;
 
-use rustfront::{Behaviour, Settings, VariableType};
+use rustfront::{Behaviour, MaterialProperty, OutOfBoundsPolicy, Settings, VariableType};
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -47,15 +47,29 @@ fn main() -> ExitCode {
         let behaviour =
             unsafe { Behaviour::load(&test.library, &test.behaviour, test.hypothesis, &settings) }
                 .map_err(|e| e.to_string())?;
-        let rows = simulation::run(&test, &behaviour)?;
+        let mut laws = Vec::new();
+        for (name, library, law) in &test.material_property_laws {
+            // SAFETY: as for the behaviour.
+            let property =
+                unsafe { MaterialProperty::load(library, law, &[], OutOfBoundsPolicy::None) }
+                    .map_err(|e| e.to_string())?;
+            laws.push((name.clone(), property));
+        }
+        let rows = simulation::run(&test, &behaviour, &laws)?;
 
         // The columns, described as MTest does.
         let d = behaviour.description();
         let suffixes = simulation::stensor_suffixes(test.hypothesis);
         let mut text = String::from("# first column: time\n");
         let mut column = 2;
+        // No strain nor stress for a point-wise model.
+        let tensors = if d.gradients.list.is_empty() {
+            &[][..]
+        } else {
+            suffixes
+        };
         for (prefix, quantity) in [("E", "strain"), ("S", "stress")] {
-            for (i, suffix) in suffixes.iter().enumerate() {
+            for (i, suffix) in tensors.iter().enumerate() {
                 text += &format!(
                     "# {column} column: {}th component of the {quantity} ({prefix}{suffix})\n",
                     i + 1
