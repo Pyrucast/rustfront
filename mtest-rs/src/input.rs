@@ -346,6 +346,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
         };
         let with_option = [
             "@Behaviour",
+            "@Model",
             "@MaterialProperty",
             "@ExternalStateVariable",
             "@ImposedStrain",
@@ -378,8 +379,11 @@ pub fn parse(source: &str) -> Result<Test, String> {
                     .parse()
                     .map_err(|e: rustfront::Error| format!("line {line}: {e}"))?;
             }
-            "@Behaviour" => {
-                if !matches!(option.as_deref(), Some("generic" | "Generic")) {
+            // A point-wise model may be declared as such. Without an
+            // interface, MTest finds it in the library: rustfront checks it
+            // is the generic one when loading.
+            "@Behaviour" | "@Model" => {
+                if !matches!(option.as_deref(), None | Some("generic" | "Generic")) {
                     return Err(format!(
                         "line {line}: only behaviours of the generic interface are supported \
                          (`@Behaviour<generic> 'library' 'behaviour';`)"
