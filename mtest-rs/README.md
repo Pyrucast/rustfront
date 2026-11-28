@@ -68,6 +68,7 @@ be imposed, usually all six off-diagonal components to zero.
 | `@StrainEpsilon`, `@StressEpsilon` | `1e-12` and `1e-3` by default; also `@DeformationGradientEpsilon`, `@DrivingVariableEpsilon`, `@GradientEpsilon`, `@ThermodynamicForceEpsilon` |
 | `@MaximumNumberOfIterations`, `@MaximumNumberOfSubSteps` | `100` and `10` by default |
 | `@PredictionPolicy` | `'NoPrediction'` by default, or `'LinearPrediction'` |
+| `@HandleThermalExpansion` | `true` by default, or `false` (see the algorithm) |
 | `@Author`, `@Date`, `@Description` | ignored |
 | `@Test`, `@XMLOutputFile` | read and ignored: no check of the results, no XML report |
 
@@ -111,6 +112,12 @@ The same as MTest's default one, so that both give the same results:
   `@StressEpsilon`, and every imposed strain and stress is met;
 - on failure, the step is halved, and kept halved until the next time of
   `@Times`;
+- for a small strain behaviour, the thermal strain α (T − T_ref) is
+  subtracted from the strain the behaviour is given, when the test declares
+  the evolutions `Temperature` and `ThermalExpansion` (`ThermalExpansion1` to
+  `3` for an orthotropic behaviour, in its material frame), even if the
+  behaviour does not declare these material properties, with
+  `ThermalExpansionReferenceTemperature`, 293.15 by default;
 - an orthotropic behaviour with a rotation matrix integrates in its material
   frame: the strains and the stress at the beginning of the step are rotated
   to it, the stress and the tangent operator it computes back to the global

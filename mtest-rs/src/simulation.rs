@@ -4,7 +4,7 @@
 
 use rustfront::{
     Behaviour, FinalState, FiniteStrainTangentOperator, Frame, Hypothesis, InitialState,
-    MaterialProperty, StressMeasure, TangentOperator, TimeStep, VariableType,
+    MaterialProperty, StressMeasure, Symmetry, TangentOperator, TimeStep, VariableType,
 };
 
 use crate::finite_strain;
@@ -135,7 +135,17 @@ pub fn run(
         .iter()
         .map(|(name, _)| name)
         .chain(laws.iter().map(|(name, _)| name));
-    if let Some(name) = unknown.into_iter().find(|name| !declared(name)) {
+    // The thermal expansion coefficients are used by mtest-rs, as by MTest.
+    let thermal = [
+        "ThermalExpansion",
+        "ThermalExpansion1",
+        "ThermalExpansion2",
+        "ThermalExpansion3",
+    ];
+    if let Some(name) = unknown
+        .into_iter()
+        .find(|name| !declared(name) && !thermal.contains(&name.as_str()))
+    {
         return Err(format!("`{}` has no material property `{name}`", d.name));
     }
     let mut material = Vec::new();
@@ -270,6 +280,59 @@ pub fn run(
     // The unknowns at the beginning of the step: strains, then multipliers.
     // A deformation gradient starts from the identity: its first three
     // components are diagonal.
+    // As MTest, the thermal strain of a small strain behaviour, subtracted
+    // from the strain it is given: α (T - T_ref) on the diagonal, from the
+    // evolutions `Temperature` and `ThermalExpansion` (`ThermalExpansion1`
+    // to `3` for an orthotropic behaviour, in its material frame), and the
+    // constant `ThermalExpansionReferenceTemperature`, 293.15 by default.
+    let named = |name: &str| -> Result<Option<Evolution>, String> {
+        test.evolutions
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, e)| {
+                e.resolve(&test.evolutions)
+                    .map_err(|e| format!("`{name}`: {e}"))
+            })
+            .transpose()
+    };
+    let reference = match named("ThermalExpansionReferenceTemperature")? {
+        Some(e) => e
+            .constant()
+            .ok_or("`ThermalExpansionReferenceTemperature` must be a constant")?,
+        None => 293.15,
+    };
+    let coefficients = match d.symmetry {
+        Symmetry::Isotropic => &thermal[..1],
+        Symmetry::Orthotropic => &thermal[1..],
+    }
+    .iter()
+    .map(|name| named(name))
+    .collect::<Result<Option<Vec<_>>, _>>()?;
+    let expansion = match (named("Temperature")?, coefficients) {
+        (Some(temperature), Some(coefficients))
+            if small_strain && test.handle_thermal_expansion =>
+        {
+            Some((temperature, coefficients))
+        }
+        _ => None,
+    };
+    let thermal_strain = |time: f64| -> Result<Vec<f64>, String> {
+        let mut e = vec![0.0; n];
+        if let Some((temperature, coefficients)) = &expansion {
+            let difference = temperature.value(time) - reference;
+            for (i, e) in e.iter_mut().take(3).enumerate() {
+                *e = coefficients[i.min(coefficients.len() - 1)].value(time) * difference;
+            }
+            if let (Some(r), 3) = (&test.rotation, coefficients.len()) {
+                behaviour
+                    .rotate_gradients(r, Frame::Global, &mut e)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(e)
+    };
+
     // The state at the first time: at rest, or as the test gives it.
     let mut u0 = vec![0.0; unknowns];
     if finite_strain {
@@ -341,6 +404,7 @@ pub fn run(
         let end = test.times[next];
         let target = (t + dt).min(end);
         let (material0, material1) = (material_values(t)?, material_values(target)?);
+        let (thermal0, thermal1) = (thermal_strain(t)?, thermal_strain(target)?);
         let (external0, external1) = (values(&external, t), values(&external, target));
         // The iterations start from the previous state, or with a linear
         // prediction, as MTest, from its extrapolation along the last step.
@@ -364,7 +428,15 @@ pub fn run(
             // stay in the material frame.
             // For finite strain, the stress the behaviour expects, from the
             // Cauchy stress.
+            // The strain the behaviour sees: without the thermal strain.
             let (mut g0, mut g1) = (u0[..n].to_vec(), u1[..n].to_vec());
+            for (g, e) in g0
+                .iter_mut()
+                .zip(&thermal0)
+                .chain(g1.iter_mut().zip(&thermal1))
+            {
+                *g -= e;
+            }
             let mut sig0 = if finite_strain {
                 finite_strain::from_cauchy(test.stress_measure, &stress0, &g0)
             } else {

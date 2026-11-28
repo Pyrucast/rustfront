@@ -1,0 +1,12 @@
+// The elasticity test behaviour heated by 200 K, its thermal strain
+// computed by MTest (and mtest-rs) from the ThermalExpansion material
+// property: EXX is held to zero, the other components are free.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'Elasticity';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+@MaterialProperty<constant> 'ThermalExpansion' 1.2e-5;
+@Real 'ThermalExpansionReferenceTemperature' 293.15;
+@ExternalStateVariable 'Temperature' {0:293.15, 1:493.15};
+@ImposedStrain 'EXX' 0;
+@Times {0, 1 in 5};

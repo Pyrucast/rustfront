@@ -59,6 +59,12 @@ pub struct Test {
     /// `@PredictionPolicy 'LinearPrediction'`: each step starts from the
     /// extrapolation of the previous one.
     pub linear_prediction: bool,
+    /// Whether mtest-rs computes, as MTest, the thermal strain of a small
+    /// strain behaviour: `@HandleThermalExpansion`, true by default.
+    pub handle_thermal_expansion: bool,
+    /// Every evolution named in the file, not resolved (`@Real`,
+    /// `@Evolution`, material properties, external state variables).
+    pub evolutions: Vec<(String, Evolution)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -322,6 +328,8 @@ pub fn parse(source: &str) -> Result<Test, String> {
         initial_gradients: None,
         initial_stress: None,
         linear_prediction: false,
+        handle_thermal_expansion: true,
+        evolutions: Vec::new(),
     };
     // The evolutions declared so far, usable in the expressions: by `@Real`,
     // `@Evolution`, and the material properties and external state
@@ -545,6 +553,17 @@ pub fn parse(source: &str) -> Result<Test, String> {
                     return Err(format!("line {line}: the initial values are already given"));
                 }
             }
+            "@HandleThermalExpansion" => {
+                test.handle_thermal_expansion = match tokens.next()? {
+                    (Token::Word(w), _) if w == "true" => true,
+                    (Token::Word(w), _) if w == "false" => false,
+                    (token, line) => {
+                        return Err(format!(
+                            "line {line}: expected `true` or `false`, found {token:?}"
+                        ))
+                    }
+                };
+            }
             "@PredictionPolicy" => {
                 test.linear_prediction = match tokens.text()?.as_str() {
                     "NoPrediction" => false,
@@ -760,6 +779,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
             .resolve(&evolutions)
             .map_err(|e| format!("`{name}`: {e}"))?;
     }
+    test.evolutions = evolutions;
     Ok(test)
 }
 

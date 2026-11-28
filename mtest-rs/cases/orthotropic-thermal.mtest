@@ -1,0 +1,22 @@
+// The orthotropic elasticity test behaviour heated by 200 K, its material
+// axes at 30° about z: its thermal strain, computed by MTest (and mtest-rs)
+// in the material frame from three coefficients, is turned to the global
+// frame. EXX is held to zero, the other components are free.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'OrthotropicElasticity';
+@MaterialProperty<constant> 'YoungModulus1' 200e9;
+@MaterialProperty<constant> 'YoungModulus2' 100e9;
+@MaterialProperty<constant> 'YoungModulus3' 50e9;
+@MaterialProperty<constant> 'PoissonRatio12' 0.3;
+@MaterialProperty<constant> 'PoissonRatio23' 0.2;
+@MaterialProperty<constant> 'PoissonRatio13' 0.25;
+@MaterialProperty<constant> 'ShearModulus12' 40e9;
+@MaterialProperty<constant> 'ShearModulus23' 30e9;
+@MaterialProperty<constant> 'ShearModulus13' 35e9;
+@MaterialProperty<constant> 'ThermalExpansion1' 1e-5;
+@MaterialProperty<constant> 'ThermalExpansion2' 2e-5;
+@MaterialProperty<constant> 'ThermalExpansion3' 3e-5;
+@ExternalStateVariable 'Temperature' {0:293.15, 1:493.15};
+@RotationMatrix<Direction> {{0.86602540378443865, 0.5, 0}, {-0.5, 0.86602540378443865, 0}};
+@ImposedStrain 'EXX' 0;
+@Times {0, 1 in 5};
