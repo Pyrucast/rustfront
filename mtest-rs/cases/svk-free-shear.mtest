@@ -1,0 +1,13 @@
+// The uniaxial tension of svk-tension with only FXY, FXZ and FYZ held to
+// zero: FYX, FZX and FZY are free, their rows of the residual carry the shear
+// of the Cauchy stress. Same results as svk-tension.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'SaintVenantKirchhoff';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+@ExternalStateVariable 'Temperature' 293.15;
+@ImposedDeformationGradient 'FXX' {0:1, 1:1.2};
+@ImposedDeformationGradient 'FXY' 0;
+@ImposedDeformationGradient 'FXZ' 0;
+@ImposedDeformationGradient 'FYZ' 0;
+@Times {0, 1 in 10};

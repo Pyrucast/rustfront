@@ -333,6 +333,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
             "@ExternalStateVariable",
             "@ImposedStrain",
             "@ImposedStress",
+            "@ImposedDeformationGradient",
         ];
         if option.is_some() && !with_option.contains(&keyword.as_str()) {
             return Err(format!("line {line}: `{keyword}` takes no option"));
@@ -379,13 +380,15 @@ pub fn parse(source: &str) -> Result<Test, String> {
                     test.external_state_variables.push((name, evolution));
                 }
             }
-            "@ImposedStrain" | "@ImposedStress" => {
+            "@ImposedStrain" | "@ImposedStress" | "@ImposedDeformationGradient" => {
                 let component = tokens.text()?;
                 let evolution = tokens.evolution(option.as_deref(), &constants)?;
-                let imposed = if keyword == "@ImposedStrain" {
-                    Imposed::Strain
-                } else {
+                // The gradient (strain or deformation gradient), or the
+                // stress (the Cauchy stress for a finite strain behaviour).
+                let imposed = if keyword == "@ImposedStress" {
                     Imposed::Stress
+                } else {
+                    Imposed::Strain
                 };
                 test.imposed.push((imposed, component, evolution));
             }

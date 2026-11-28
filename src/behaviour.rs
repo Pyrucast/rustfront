@@ -20,7 +20,9 @@ pub enum VariableType {
     /// Symmetric tensor: 3, 4 or 6 components, stored in TFEL's convention
     /// (`xx`, `yy`, `zz`, `√2·xy`, `√2·xz`, `√2·yz`).
     Stensor,
-    /// Unsymmetric tensor: 3, 5 or 9 components.
+    /// Unsymmetric tensor: 3, 5 or 9 components, stored in TFEL's order and
+    /// without factor: `xx yy zz xy yx xz zx yz zy` in 3D, `xx yy zz xy yx`
+    /// in 2D, `rr zz tt rz zr` in axisymmetry, `rr zz tt` in 1D.
     Tensor,
 }
 
@@ -104,8 +106,42 @@ impl OutOfBoundsPolicy {
     }
 }
 
+/// The stress a finite strain behaviour computes, in the thermodynamic
+/// forces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StressMeasure {
+    /// The Cauchy stress, a symmetric tensor named `Stress`.
+    #[default]
+    Cauchy,
+    /// The second Piola-Kirchhoff stress, a symmetric tensor named
+    /// `SecondPiolaKirchhoffStress`.
+    SecondPiolaKirchhoff,
+    /// The first Piola-Kirchhoff stress, an unsymmetric tensor named
+    /// `FirstPiolaKirchhoffStress`.
+    FirstPiolaKirchhoff,
+}
+
+/// The tangent operator a finite strain behaviour computes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FiniteStrainTangentOperator {
+    /// The derivative of the Cauchy stress with respect to the deformation
+    /// gradient, `DSIG_DF` for MFront.
+    #[default]
+    CauchyByDeformationGradient,
+    /// The derivative of the second Piola-Kirchhoff stress with respect to
+    /// the Green-Lagrange strain, `DS_DEGL`.
+    SecondPiolaKirchhoffByGreenLagrange,
+    /// The derivative of the first Piola-Kirchhoff stress with respect to
+    /// the deformation gradient, `DPK1_DF`.
+    FirstPiolaKirchhoffByDeformationGradient,
+    /// The derivative of the Kirchhoff stress with respect to the spatial
+    /// increment of the deformation gradient, `DTAU_DDF`.
+    KirchhoffBySpatialIncrement,
+}
+
 /// What [`Behaviour::load`] changes in the library: the values of
-/// parameters, and the out of bounds policy.
+/// parameters, and the out of bounds policy; and, for a finite strain
+/// behaviour, the stress and the tangent operator to compute.
 ///
 /// Both are static variables of the library, shared by every `Behaviour`
 /// loaded from it for the same behaviour: the last load wins.
@@ -116,6 +152,7 @@ impl OutOfBoundsPolicy {
 /// let settings = Settings {
 ///     parameters: &[("epsilon", ParameterValue::Real(1e-12))],
 ///     out_of_bounds_policy: Some(OutOfBoundsPolicy::Strict),
+///     ..Default::default()
 /// };
 /// // Nothing changed: the values and the policy of the library.
 /// let defaults = Settings::default();
@@ -128,6 +165,13 @@ pub struct Settings<'a> {
     pub parameters: &'a [(&'a str, ParameterValue)],
     /// The policy to set; `None` keeps the one of the library.
     pub out_of_bounds_policy: Option<OutOfBoundsPolicy>,
+    /// For a finite strain behaviour, the stress in the thermodynamic forces:
+    /// the Cauchy stress by default.
+    pub stress_measure: StressMeasure,
+    /// For a finite strain behaviour, the tangent operator: the derivative
+    /// of the Cauchy stress with respect to the deformation gradient by
+    /// default.
+    pub finite_strain_tangent_operator: FiniteStrainTangentOperator,
 }
 
 /// The time step of an integration.
@@ -254,6 +298,9 @@ pub struct Integration {
 pub struct Behaviour {
     description: Description,
     integrate: ffi::IntegrateFn,
+    /// For a finite strain behaviour, `K[1]` and `K[2]`: the codes of the
+    /// stress measure and of the tangent operator it reads.
+    finite_strain: Option<[f64; 2]>,
     /// Keeps the library loaded as long as `integrate` can be called.
     _library: Library,
 }
@@ -329,10 +376,28 @@ impl Behaviour {
             });
         }
         let code = symbols.u16("BehaviourType")?;
-        if code > 1 {
+        if code > 2 {
             return Err(Error::UnsupportedBehaviourType {
                 name: name.to_owned(),
                 code,
+            });
+        }
+        // A finite strain behaviour (2), its own or through a strain measure:
+        // the deformation gradient and the Cauchy stress (kinematic 3).
+        let finite_strain = code == 2;
+        if finite_strain {
+            let kinematic = symbols.u16("BehaviourKinematic")?;
+            if kinematic != 3 {
+                return Err(Error::UnsupportedKinematic {
+                    name: name.to_owned(),
+                    kinematic,
+                });
+            }
+        } else if settings.stress_measure != StressMeasure::default()
+            || settings.finite_strain_tangent_operator != FiniteStrainTangentOperator::default()
+        {
+            return Err(Error::FiniteStrainSettings {
+                name: name.to_owned(),
             });
         }
         let n = usize::from(symbols.u16("nModellingHypotheses")?);
@@ -354,8 +419,21 @@ impl Behaviour {
         // that computes these tensors itself, then the temperature, are not
         // listed by the library but expected first, as MGIS does.
         let gradients = layout(symbols.variables("Gradients", true)?, dimension);
-        let thermodynamic_forces =
-            layout(symbols.variables("ThermodynamicForces", true)?, dimension);
+        // The stress the settings choose for a finite strain behaviour, as
+        // MGIS names it.
+        let thermodynamic_forces = match settings.stress_measure {
+            StressMeasure::SecondPiolaKirchhoff if finite_strain => {
+                vec![(
+                    "SecondPiolaKirchhoffStress".to_owned(),
+                    VariableType::Stensor,
+                )]
+            }
+            StressMeasure::FirstPiolaKirchhoff if finite_strain => {
+                vec![("FirstPiolaKirchhoffStress".to_owned(), VariableType::Tensor)]
+            }
+            _ => symbols.variables("ThermodynamicForces", true)?,
+        };
+        let thermodynamic_forces = layout(thermodynamic_forces, dimension);
         let mut material_properties = Vec::new();
         let mut scalars = |names: &[&str]| {
             material_properties.extend(names.iter().map(|n| (n.to_string(), VariableType::Scalar)));
@@ -396,33 +474,74 @@ impl Behaviour {
         external_state_variables.extend(symbols.variables("ExternalStateVariables", true)?);
         let external_state_variables = layout(external_state_variables, dimension);
 
-        // The tangent operator: blocks (derivative of, with respect to),
-        // listed as a flat array of names.
-        let n = usize::from(symbols.u16("nTangentOperatorBlocks")?);
-        let names = symbols.strings("TangentOperatorBlocks", n)?;
-        let mut tangent_operator_size = 0;
-        let mut tangent_operator_blocks = Vec::new();
-        for [of, with_respect_to] in names.as_chunks::<2>().0 {
-            // The block size: the product of the sizes of its two variables.
-            let mut size = 1;
-            for variable in [of, with_respect_to] {
-                size *= [
-                    &gradients,
-                    &thermodynamic_forces,
-                    &internal_state_variables,
-                    &external_state_variables,
-                ]
-                .iter()
-                .flat_map(|v| &v.list)
-                .find(|v| &v.name == variable)
-                .ok_or_else(|| Error::InvalidTangentOperatorBlock {
-                    variable: variable.clone(),
-                })?
-                .size;
+        // The tangent operator: blocks (derivative of, with respect to). That
+        // of a finite strain behaviour is the one the settings choose, named
+        // as MGIS does; the others are listed as a flat array of names.
+        let (tangent_operator_blocks, tangent_operator_size) = if finite_strain {
+            let (of, of_type, with_respect_to, with_respect_to_type) =
+                match settings.finite_strain_tangent_operator {
+                    FiniteStrainTangentOperator::CauchyByDeformationGradient => (
+                        "Stress",
+                        VariableType::Stensor,
+                        "DeformationGradient",
+                        VariableType::Tensor,
+                    ),
+                    FiniteStrainTangentOperator::SecondPiolaKirchhoffByGreenLagrange => (
+                        "SecondPiolaKirchhoffStress",
+                        VariableType::Stensor,
+                        "GreenLagrangeStrain",
+                        VariableType::Stensor,
+                    ),
+                    FiniteStrainTangentOperator::FirstPiolaKirchhoffByDeformationGradient => (
+                        "FirstPiolaKirchhoffStress",
+                        VariableType::Tensor,
+                        "DeformationGradient",
+                        VariableType::Tensor,
+                    ),
+                    FiniteStrainTangentOperator::KirchhoffBySpatialIncrement => (
+                        "KirchhoffStress",
+                        VariableType::Stensor,
+                        "SpatialIncrementOfTheDeformationGradient",
+                        VariableType::Tensor,
+                    ),
+                };
+            let block = layout(
+                vec![
+                    (of.to_owned(), of_type),
+                    (with_respect_to.to_owned(), with_respect_to_type),
+                ],
+                dimension,
+            );
+            let size = block.list[0].size * block.list[1].size;
+            (vec![(of.to_owned(), with_respect_to.to_owned())], size)
+        } else {
+            let n = usize::from(symbols.u16("nTangentOperatorBlocks")?);
+            let names = symbols.strings("TangentOperatorBlocks", n)?;
+            let mut size = 0;
+            let mut blocks = Vec::new();
+            for [of, with_respect_to] in names.as_chunks::<2>().0 {
+                // The block size: the product of the sizes of its two variables.
+                let mut block = 1;
+                for variable in [of, with_respect_to] {
+                    block *= [
+                        &gradients,
+                        &thermodynamic_forces,
+                        &internal_state_variables,
+                        &external_state_variables,
+                    ]
+                    .iter()
+                    .flat_map(|v| &v.list)
+                    .find(|v| &v.name == variable)
+                    .ok_or_else(|| Error::InvalidTangentOperatorBlock {
+                        variable: variable.clone(),
+                    })?
+                    .size;
+                }
+                size += block;
+                blocks.push((of.clone(), with_respect_to.clone()));
             }
-            tangent_operator_size += size;
-            tangent_operator_blocks.push((of.clone(), with_respect_to.clone()));
-        }
+            (blocks, size)
+        };
 
         // The parameters, then the settings, in the static variables of the
         // library.
@@ -459,6 +578,19 @@ impl Behaviour {
                 parameters,
             },
             integrate,
+            finite_strain: finite_strain.then_some([
+                match settings.stress_measure {
+                    StressMeasure::Cauchy => 0.0,
+                    StressMeasure::SecondPiolaKirchhoff => 1.0,
+                    StressMeasure::FirstPiolaKirchhoff => 2.0,
+                },
+                match settings.finite_strain_tangent_operator {
+                    FiniteStrainTangentOperator::CauchyByDeformationGradient => 0.0,
+                    FiniteStrainTangentOperator::SecondPiolaKirchhoffByGreenLagrange => 1.0,
+                    FiniteStrainTangentOperator::FirstPiolaKirchhoffByDeformationGradient => 2.0,
+                    FiniteStrainTangentOperator::KirchhoffBySpatialIncrement => 3.0,
+                },
+            ]),
             _library: library,
         })
     }
@@ -473,6 +605,12 @@ impl Behaviour {
     /// the state `s1`. When `tangent` is given, the behaviour computes that
     /// operator into the array, of length
     /// [`Description::tangent_operator_size`].
+    ///
+    /// The gradient of a finite strain behaviour is the deformation gradient
+    /// F, a [`VariableType::Tensor`]: at rest, the identity, `[1.0, 1.0, 1.0,
+    /// 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]` in 3D. Its thermodynamic forces and
+    /// tangent operator are those [`Settings`] chose at load, as the
+    /// [`Description`] names them.
     ///
     /// ```no_run
     /// use rustfront::{
@@ -583,10 +721,13 @@ impl Behaviour {
                 found,
             });
         }
-        // `K[0]` tells the behaviour which operator to compute, 0 for none. It
-        // must be readable even when no operator is requested, hence a one
-        // value array when the caller gives none (or an empty one).
-        let mut no_tangent = [0.0];
+        // `K[0]` tells the behaviour which operator to compute, 0 for none; a
+        // finite strain behaviour reads its stress measure and tangent
+        // operator in `K[1]` and `K[2]`. They must be readable even when no
+        // operator is requested, hence a three values array when the caller
+        // gives none (or an empty one). A tangent operator of a finite strain
+        // behaviour has at least 9 values.
+        let mut no_tangent = [0.0; 3];
         let k = match tangent {
             Some((operator, k)) if !k.is_empty() => {
                 k[0] = match operator {
@@ -599,6 +740,9 @@ impl Behaviour {
             }
             _ => &mut no_tangent[..],
         };
+        if let Some(options) = self.finite_strain {
+            k[1..3].copy_from_slice(&options);
+        }
         // A behaviour that does not compute the energies leaves them as they
         // were at the beginning of the step.
         let mut stored_energy = s0.stored_energy;

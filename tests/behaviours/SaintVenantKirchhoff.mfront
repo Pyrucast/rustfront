@@ -1,0 +1,32 @@
+@DSL DefaultFiniteStrain;
+@Behaviour SaintVenantKirchhoff;
+@Author rustfront contributors;
+@Description {
+  The Saint Venant-Kirchhoff hyperelastic law, written for the tests of
+  rustfront: S = lambda tr(E) I + 2 mu E, E being the Green-Lagrange strain
+  and S the second Piola-Kirchhoff stress. Its tangent operator is given as
+  dS/dE, which MFront converts to the one requested.
+}
+
+@MaterialProperty stress young;
+young.setGlossaryName("YoungModulus");
+@MaterialProperty real nu;
+nu.setGlossaryName("PoissonRatio");
+
+@LocalVariable stress lambda;
+@LocalVariable stress mu;
+
+@InitLocalVariables {
+  lambda = young * nu / ((1 + nu) * (1 - 2 * nu));
+  mu = young / (2 * (1 + nu));
+}
+
+@Integrator {
+  const auto e = computeGreenLagrangeTensor(F1);
+  const auto S = lambda * trace(e) * Stensor::Id() + 2 * mu * e;
+  sig = convertSecondPiolaKirchhoffStressToCauchyStress(S, F1);
+}
+
+@TangentOperator<DS_DEGL> {
+  Dt = lambda * Stensor4::IxI() + 2 * mu * Stensor4::Id();
+}

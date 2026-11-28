@@ -1,0 +1,16 @@
+// The Saint Venant-Kirchhoff test behaviour driven by the Cauchy stress:
+// SXX rises to 10 GPa, the off-diagonal components of the deformation
+// gradient are held to zero, its diagonal is free.
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'SaintVenantKirchhoff';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+@ExternalStateVariable 'Temperature' 293.15;
+@ImposedStress 'SXX' {0:0, 1:10e9};
+@ImposedDeformationGradient 'FXY' 0;
+@ImposedDeformationGradient 'FYX' 0;
+@ImposedDeformationGradient 'FXZ' 0;
+@ImposedDeformationGradient 'FZX' 0;
+@ImposedDeformationGradient 'FYZ' 0;
+@ImposedDeformationGradient 'FZY' 0;
+@Times {0, 1 in 10};

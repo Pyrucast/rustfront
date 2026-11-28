@@ -21,7 +21,8 @@ independent reimplementation of a subset of MTest built on it.
   - `voigt.rs`: conversions between TFEL's storage of symmetric tensors
     (`xx, yy, zz, √2·xy, √2·xz, √2·yz`) and Voigt notation.
 - `mtest-rs/`: the command line tool; it follows MTest's default algorithm
-  exactly (Lagrange multipliers, convergence criteria, sub-steps).
+  exactly (Lagrange multipliers, convergence criteria, sub-steps), with the
+  finite strain residual of TFEL's master branch (see `scripts/try.sh`).
 - `tests/behaviours/*.mfront`: test behaviours written for this repository.
   Do not copy TFEL's own test behaviours: their licence is not ours.
 - `scripts/`: `check.sh` (the checks of the CI), `try.sh` (mtest-rs against

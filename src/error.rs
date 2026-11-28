@@ -58,14 +58,26 @@ pub enum Error {
         /// The version found.
         version: String,
     },
-    /// The behaviour is neither a small strain one nor a general one (models
-    /// included): finite strain behaviours and cohesive zone models are not
-    /// supported yet.
+    /// The behaviour is a cohesive zone model, not supported yet.
     UnsupportedBehaviourType {
         /// The behaviour.
         name: String,
-        /// The `_BehaviourType` symbol: 2 finite strain, 3 cohesive zone model.
+        /// The `_BehaviourType` symbol: 3 for a cohesive zone model.
         code: u16,
+    },
+    /// A finite strain behaviour of another kinematic than the deformation
+    /// gradient and the Cauchy stress.
+    UnsupportedKinematic {
+        /// The behaviour.
+        name: String,
+        /// The `_BehaviourKinematic` symbol; 3 is the one supported.
+        kinematic: u16,
+    },
+    /// [`crate::Settings`] chooses a stress measure or a tangent operator for
+    /// a behaviour that is not a finite strain one.
+    FiniteStrainSettings {
+        /// The behaviour.
+        name: String,
     },
     /// The behaviour was not generated for the requested hypothesis.
     UnsupportedHypothesis {
@@ -180,8 +192,17 @@ impl fmt::Display for Error {
             ),
             Error::UnsupportedBehaviourType { name, code } => write!(
                 f,
-                "`{name}` is neither a small strain behaviour nor a general one \
-                 (behaviour type {code}): not supported yet"
+                "`{name}` is a cohesive zone model (behaviour type {code}): not supported yet"
+            ),
+            Error::UnsupportedKinematic { name, kinematic } => write!(
+                f,
+                "`{name}` is a finite strain behaviour of kinematic {kinematic}, \
+                 only the deformation gradient and the Cauchy stress (3) are supported"
+            ),
+            Error::FiniteStrainSettings { name } => write!(
+                f,
+                "`{name}` is not a finite strain behaviour: it has no stress measure \
+                 nor finite strain tangent operator to choose"
             ),
             Error::UnsupportedHypothesis {
                 name,

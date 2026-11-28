@@ -8,8 +8,9 @@ use std::sync::OnceLock;
 
 use rustfront::voigt::{self, Shear};
 use rustfront::{
-    Behaviour, Error, FinalState, Hypothesis, InitialState, MaterialProperty, OutOfBoundsPolicy,
-    ParameterValue, Settings, Symmetry, TangentOperator, TimeStep, VariableType,
+    Behaviour, Error, FinalState, FiniteStrainTangentOperator, Hypothesis, InitialState,
+    MaterialProperty, OutOfBoundsPolicy, ParameterValue, Settings, StressMeasure, Symmetry,
+    TangentOperator, TimeStep, VariableType,
 };
 
 const YOUNG: f64 = 200e9;
@@ -688,5 +689,234 @@ fn material_properties_are_evaluated() {
             Err(Error::MissingSymbol { .. } | Error::UnexpectedKind { .. })
         ),
         "{property:?}"
+    );
+}
+
+/// The deformation gradient at rest, in TFEL's order: XX YY ZZ XY YX XZ ZX YZ ZY.
+const IDENTITY: [f64; 9] = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+/// Integrates the finite strain behaviour `name` in 3D from rest to the
+/// deformation gradient `f1`: the thermodynamic forces and the consistent
+/// tangent operator.
+fn finite(name: &str, settings: &Settings, f1: [f64; 9]) -> (Vec<f64>, Vec<f64>) {
+    let behaviour = load(name, Hypothesis::Tridimensional, settings).unwrap();
+    let d = behaviour.description();
+    let material = [YOUNG, POISSON];
+    let forces0 = vec![0.0; d.thermodynamic_forces.size];
+    let mut forces1 = forces0.clone();
+    let mut k = vec![0.0; d.tangent_operator_size];
+    let s0 = InitialState {
+        gradients: &IDENTITY,
+        thermodynamic_forces: &forces0,
+        material_properties: &material,
+        external_state_variables: &TEMPERATURE,
+        ..Default::default()
+    };
+    let mut s1 = FinalState {
+        gradients: &f1,
+        thermodynamic_forces: &mut forces1,
+        material_properties: &material,
+        external_state_variables: &TEMPERATURE,
+        ..Default::default()
+    };
+    let step = TimeStep {
+        dt: 1.0,
+        max_scaling_factor: 1.0,
+    };
+    let tangent = Some((TangentOperator::ConsistentTangent, k.as_mut_slice()));
+    behaviour.integrate(step, &s0, &mut s1, tangent).unwrap();
+    (forces1, k)
+}
+
+/// A uniaxial stretch `l` along x, the other directions held.
+fn stretch(l: f64) -> [f64; 9] {
+    [l, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+}
+
+#[test]
+fn finite_strain_behaviours_describe_themselves() {
+    let sizes = |hypothesis, settings: &Settings| {
+        let d = load("SaintVenantKirchhoff", hypothesis, settings)
+            .unwrap()
+            .description()
+            .clone();
+        assert_eq!(d.gradients.list[0].name, "DeformationGradient");
+        assert_eq!(d.gradients.list[0].variable_type, VariableType::Tensor);
+        let blocks = d.tangent_operator_blocks.clone();
+        (
+            d.gradients.size,
+            d.thermodynamic_forces.list[0].name.clone(),
+            d.thermodynamic_forces.size,
+            blocks,
+            d.tangent_operator_size,
+        )
+    };
+    let block = |of: &str, with_respect_to: &str| vec![(of.to_owned(), with_respect_to.to_owned())];
+    let defaults = Settings::default();
+    assert_eq!(
+        sizes(Hypothesis::Tridimensional, &defaults),
+        (
+            9,
+            "Stress".to_owned(),
+            6,
+            block("Stress", "DeformationGradient"),
+            54
+        )
+    );
+    assert_eq!(
+        sizes(Hypothesis::PlaneStrain, &defaults),
+        (
+            5,
+            "Stress".to_owned(),
+            4,
+            block("Stress", "DeformationGradient"),
+            20
+        )
+    );
+    let pk1 = Settings {
+        stress_measure: StressMeasure::FirstPiolaKirchhoff,
+        finite_strain_tangent_operator:
+            FiniteStrainTangentOperator::FirstPiolaKirchhoffByDeformationGradient,
+        ..Default::default()
+    };
+    assert_eq!(
+        sizes(Hypothesis::Tridimensional, &pk1),
+        (
+            9,
+            "FirstPiolaKirchhoffStress".to_owned(),
+            9,
+            block("FirstPiolaKirchhoffStress", "DeformationGradient"),
+            81
+        )
+    );
+    let pk2 = Settings {
+        stress_measure: StressMeasure::SecondPiolaKirchhoff,
+        finite_strain_tangent_operator:
+            FiniteStrainTangentOperator::SecondPiolaKirchhoffByGreenLagrange,
+        ..Default::default()
+    };
+    assert_eq!(
+        sizes(Hypothesis::Tridimensional, &pk2),
+        (
+            9,
+            "SecondPiolaKirchhoffStress".to_owned(),
+            6,
+            block("SecondPiolaKirchhoffStress", "GreenLagrangeStrain"),
+            36
+        )
+    );
+    let tau = Settings {
+        finite_strain_tangent_operator: FiniteStrainTangentOperator::KirchhoffBySpatialIncrement,
+        ..Default::default()
+    };
+    assert_eq!(
+        sizes(Hypothesis::Tridimensional, &tau).3,
+        block(
+            "KirchhoffStress",
+            "SpatialIncrementOfTheDeformationGradient"
+        )
+    );
+}
+
+#[test]
+fn saint_venant_kirchhoff_gives_the_three_stresses() {
+    // F = diag(l, 1, 1): E = diag((l² - 1) / 2, 0, 0), S = λ tr(E) I + 2μ E,
+    // σ = F S Fᵀ / J with J = l, and the first Piola-Kirchhoff stress P = F S.
+    let l = 1.1;
+    let exx = (l * l - 1.0) / 2.0;
+    let (sxx, syy) = ((LAMBDA + 2.0 * MU) * exx, LAMBDA * exx);
+    let (sigma, _) = finite("SaintVenantKirchhoff", &Settings::default(), stretch(l));
+    for (found, expected) in sigma.iter().zip([l * sxx, syy / l, syy / l, 0.0, 0.0, 0.0]) {
+        assert_close(*found, expected);
+    }
+    let pk2 = Settings {
+        stress_measure: StressMeasure::SecondPiolaKirchhoff,
+        finite_strain_tangent_operator:
+            FiniteStrainTangentOperator::SecondPiolaKirchhoffByGreenLagrange,
+        ..Default::default()
+    };
+    let (s, k) = finite("SaintVenantKirchhoff", &pk2, stretch(l));
+    for (found, expected) in s.iter().zip([sxx, syy, syy, 0.0, 0.0, 0.0]) {
+        assert_close(*found, expected);
+    }
+    // dS/dE = λ I⊗I + 2μ I, row major, 2μ on the shear diagonal (TFEL's √2).
+    assert_close(k[0], LAMBDA + 2.0 * MU);
+    assert_close(k[1], LAMBDA);
+    assert_close(k[6 * 3 + 3], 2.0 * MU);
+    let pk1 = Settings {
+        stress_measure: StressMeasure::FirstPiolaKirchhoff,
+        ..Default::default()
+    };
+    let (p, _) = finite("SaintVenantKirchhoff", &pk1, stretch(l));
+    assert_eq!(p.len(), 9);
+    for (found, expected) in p
+        .iter()
+        .zip([l * sxx, syy, syy, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    {
+        assert_close(*found, expected);
+    }
+}
+
+#[test]
+fn hencky_elasticity_follows_the_logarithmic_strain() {
+    // F = diag(l, 1, 1): H = ln V = diag(ln l, 0, 0), τ = λ tr(H) I + 2μ H,
+    // and σ = τ / J with J = l.
+    let l: f64 = 1.1;
+    let h = l.ln();
+    let (sigma, _) = finite("HenckyElasticity", &Settings::default(), stretch(l));
+    let expected = [(LAMBDA + 2.0 * MU) * h / l, LAMBDA * h / l, LAMBDA * h / l];
+    for (found, expected) in sigma.iter().zip(expected) {
+        assert_close(*found, expected);
+    }
+}
+
+#[test]
+fn finite_strain_behaviours_integrate_without_tangent_operator() {
+    // The behaviour reads K[1] and K[2] even without a tangent operator.
+    let behaviour = load(
+        "SaintVenantKirchhoff",
+        Hypothesis::Tridimensional,
+        &Settings {
+            stress_measure: StressMeasure::SecondPiolaKirchhoff,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let material = [YOUNG, POISSON];
+    let f1 = stretch(1.1);
+    let (zero, mut s) = ([0.0; 6], [0.0; 6]);
+    let s0 = InitialState {
+        gradients: &IDENTITY,
+        thermodynamic_forces: &zero,
+        material_properties: &material,
+        external_state_variables: &TEMPERATURE,
+        ..Default::default()
+    };
+    let mut s1 = FinalState {
+        gradients: &f1,
+        thermodynamic_forces: &mut s,
+        material_properties: &material,
+        external_state_variables: &TEMPERATURE,
+        ..Default::default()
+    };
+    let step = TimeStep {
+        dt: 1.0,
+        max_scaling_factor: 1.0,
+    };
+    behaviour.integrate(step, &s0, &mut s1, None).unwrap();
+    // The second Piola-Kirchhoff stress, not the Cauchy one: K[1] was read.
+    assert_close(s[0], (LAMBDA + 2.0 * MU) * (1.1 * 1.1 - 1.0) / 2.0);
+}
+
+#[test]
+fn finite_strain_settings_are_refused_for_small_strain_behaviours() {
+    let settings = Settings {
+        stress_measure: StressMeasure::SecondPiolaKirchhoff,
+        ..Default::default()
+    };
+    let refused = load("Elasticity", Hypothesis::Tridimensional, &settings);
+    assert!(
+        matches!(refused, Err(Error::FiniteStrainSettings { .. })),
+        "{refused:?}"
     );
 }

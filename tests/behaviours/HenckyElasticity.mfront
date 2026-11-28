@@ -1,0 +1,27 @@
+@DSL Default;
+@Behaviour HenckyElasticity;
+@Author rustfront contributors;
+@Description {
+  Isotropic linear elasticity on the Hencky (logarithmic) strain, written
+  for the tests of rustfront: a small strain behaviour turned into a
+  finite strain one by its strain measure. The stress is the dual of the
+  logarithmic strain; MFront converts it to the one requested.
+}
+
+@StrainMeasure Hencky;
+
+@MaterialProperty stress young;
+young.setGlossaryName("YoungModulus");
+@MaterialProperty real nu;
+nu.setGlossaryName("PoissonRatio");
+
+@ProvidesSymmetricTangentOperator;
+
+@Integrator {
+  const auto lambda = young * nu / ((1 + nu) * (1 - 2 * nu));
+  const auto mu = young / (2 * (1 + nu));
+  sig = lambda * trace(eto + deto) * Stensor::Id() + 2 * mu * (eto + deto);
+  if (computeTangentOperator_) {
+    Dt = lambda * Stensor4::IxI() + 2 * mu * Stensor4::Id();
+  }
+}

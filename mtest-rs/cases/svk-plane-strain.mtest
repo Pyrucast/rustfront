@@ -1,0 +1,12 @@
+// The Saint Venant-Kirchhoff test behaviour in plane strain: FZZ is one,
+// FXX is stretched to 1.2, FXY and FYX are held to zero, FYY is free.
+@ModellingHypothesis 'PlaneStrain';
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'SaintVenantKirchhoff';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+@ExternalStateVariable 'Temperature' 293.15;
+@ImposedDeformationGradient 'FXX' {0:1, 1:1.2};
+@ImposedDeformationGradient 'FXY' 0;
+@ImposedDeformationGradient 'FYX' 0;
+@Times {0, 1 in 10};

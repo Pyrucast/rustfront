@@ -4,10 +4,10 @@
 usage: compare.py reference.res candidate.res [--rtol 1e-12]
 
 The tolerance of a column is rtol times the largest absolute value of its
-group: all the strain components together, all the stress components
-together, every other column on its own. A free stress component, zero up to
-round-off, is thus compared with the scale of the stresses, not with its own
-noise.
+group: all the components of the strain (or of the deformation gradient)
+together, all those of the stress together, every other column on its own.
+A free stress component, zero up to round-off, is thus compared with the
+scale of the stresses, not with its own noise.
 
 mtest-rs follows MTest's algorithm, so both agree to round-off: the default
 tolerance, 1e-12, is meant for results written with 14 digits
@@ -47,9 +47,10 @@ if len(reference) != len(candidate):
 
 
 def group(name):
-    for quantity in ("of the strain", "of the stress"):
-        if quantity in name:
-            return quantity
+    # "1th component of the deformation gradient (FXX)": the quantity, here
+    # the deformation gradient, groups the columns of its components.
+    if "th component of the " in name:
+        return name.split("th component of the ", 1)[1].split(" (", 1)[0]
     return name
 
 

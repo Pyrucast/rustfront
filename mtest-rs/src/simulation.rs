@@ -23,6 +23,20 @@ pub fn stensor_suffixes(hypothesis: Hypothesis) -> &'static [&'static str] {
     }
 }
 
+/// The suffixes of the components of an unsymmetric tensor, in TFEL's order:
+/// `XX YY ZZ XY YX XZ ZX YZ ZY` in 3D, those of `FXX`…
+pub fn tensor_suffixes(hypothesis: Hypothesis) -> &'static [&'static str] {
+    match hypothesis {
+        Hypothesis::AxisymmetricalGeneralisedPlaneStrain
+        | Hypothesis::AxisymmetricalGeneralisedPlaneStress => &["RR", "ZZ", "TT"],
+        Hypothesis::Axisymmetrical => &["RR", "ZZ", "TT", "RZ", "ZR"],
+        Hypothesis::PlaneStress | Hypothesis::PlaneStrain | Hypothesis::GeneralisedPlaneStrain => {
+            &["XX", "YY", "ZZ", "XY", "YX"]
+        }
+        Hypothesis::Tridimensional => &["XX", "YY", "ZZ", "XY", "YX", "XZ", "ZX", "YZ", "ZY"],
+    }
+}
+
 /// Runs the test, the material properties `laws` loaded from the libraries
 /// the file names. Each row of the result is a line of the output file: the
 /// time, the strain, the stress, the internal state variables, the stored and
@@ -33,18 +47,24 @@ pub fn run(
     laws: &[(String, MaterialProperty)],
 ) -> Result<Vec<Vec<f64>>, String> {
     let d = behaviour.description();
-    // A small strain behaviour, or a point-wise model: no gradient at all.
+    // A small strain behaviour, a finite strain one (loaded with the Cauchy
+    // stress and its derivative with respect to the deformation gradient), or
+    // a point-wise model: no gradient at all.
     let small_strain = d.gradients.list.len() == 1
         && d.gradients.list[0].variable_type == VariableType::Stensor
         && d.tangent_operator_blocks == [("Stress".to_owned(), "Strain".to_owned())];
+    let finite_strain = d.gradients.list.len() == 1
+        && d.gradients.list[0].variable_type == VariableType::Tensor
+        && d.tangent_operator_blocks == [("Stress".to_owned(), "DeformationGradient".to_owned())];
     let model = d.gradients.list.is_empty() && d.thermodynamic_forces.list.is_empty();
-    if !small_strain && !model {
+    if !small_strain && !finite_strain && !model {
         return Err(format!(
-            "`{}` is neither a small strain behaviour nor a point-wise model",
+            "`{}` is neither a small strain behaviour, a finite strain one nor a point-wise model",
             d.name
         ));
     }
-    let n = d.gradients.size;
+    // The gradients (strain or deformation gradient), and the stress.
+    let (n, m) = (d.gradients.size, d.thermodynamic_forces.size);
 
     // The external state variables, in the order of the behaviour.
     if let Some((name, _)) = test.external_state_variables.iter().find(|(name, _)| {
@@ -163,11 +183,17 @@ pub fn run(
     // after the strain components among the unknowns.
     let zero = Evolution::Constant(0.0);
     let mut constraints: Vec<(Imposed, usize, &Evolution)> = Vec::new();
-    let suffixes = stensor_suffixes(test.hypothesis);
+    // The components: `EXX`… or `FXX`…, and `SXX`…
+    let gradient = if finite_strain {
+        ('F', tensor_suffixes(test.hypothesis))
+    } else {
+        ('E', stensor_suffixes(test.hypothesis))
+    };
+    let stress = ('S', stensor_suffixes(test.hypothesis));
     for (kind, component, evolution) in &test.imposed {
-        let prefix = match kind {
-            Imposed::Strain => 'E',
-            Imposed::Stress => 'S',
+        let (prefix, suffixes) = match kind {
+            Imposed::Strain => gradient,
+            Imposed::Stress => stress,
         };
         let i = suffixes
             .iter()
@@ -183,9 +209,10 @@ pub fn run(
         }
         constraints.push((*kind, i, evolution));
     }
-    // Plane strain: EZZ is zero. Plane stress, and axisymmetrical generalised
-    // plane stress: the behaviour handles the out-of-plane strain, MTest
-    // imposes a zero gradient and a zero stress on that component.
+    // Plane strain: EZZ is zero, FZZ one. Plane stress, and axisymmetrical
+    // generalised plane stress: the behaviour handles the out-of-plane
+    // strain, MTest imposes the gradient at rest and a zero stress on that
+    // component.
     let added: &[(Imposed, usize)] = match test.hypothesis {
         Hypothesis::PlaneStrain => &[(Imposed::Strain, 2)],
         Hypothesis::PlaneStress => &[(Imposed::Strain, 2), (Imposed::Stress, 2)],
@@ -197,12 +224,19 @@ pub fn run(
     for &(_, i) in added {
         if constraints.iter().any(|(_, c, _)| *c == i) {
             return Err(format!(
-                "`{}` cannot be imposed in the {} hypothesis",
-                suffixes[i], test.hypothesis
+                "`{}{}` cannot be imposed in the {} hypothesis",
+                gradient.0, gradient.1[i], test.hypothesis
             ));
         }
     }
-    constraints.extend(added.iter().map(|&(kind, i)| (kind, i, &zero)));
+    let rest = Evolution::Constant(if finite_strain { 1.0 } else { 0.0 });
+    constraints.extend(added.iter().map(|&(kind, i)| {
+        let value = match kind {
+            Imposed::Strain => &rest,
+            Imposed::Stress => &zero,
+        };
+        (kind, i, value)
+    }));
     let multipliers = constraints
         .iter()
         .filter(|(kind, _, _)| *kind == Imposed::Strain)
@@ -210,8 +244,30 @@ pub fn run(
     let unknowns = n + multipliers;
 
     // The unknowns at the beginning of the step: strains, then multipliers.
+    // A deformation gradient starts from the identity: its first three
+    // components are diagonal.
     let mut u0 = vec![0.0; unknowns];
-    let mut stress0 = vec![0.0; n];
+    if finite_strain {
+        u0[..3].fill(1.0);
+    }
+    let mut stress0 = vec![0.0; m];
+    // Where each stress component goes in the residual, as MTest assembles
+    // it: in its own row for a small strain behaviour; for a finite strain
+    // one, the diagonal in the rows of the diagonal of F, and each shear in
+    // the two rows of its components of F (σxy in FXY and FYX), the rows of
+    // the tangent operator likewise. The MTest of TFEL 5.1 and before puts
+    // the diagonal (σxx) in the rows of the shear, which only its tangent
+    // operator gets right; fixed in TFEL's master branch, followed here.
+    // With imposed shear components, the multipliers absorb the difference:
+    // the same results, one more iteration for that MTest.
+    let stress_rows: Vec<(usize, usize)> = if finite_strain {
+        (0..3)
+            .map(|i| (i, i))
+            .chain((0..m - 3).flat_map(|i| [(3 + 2 * i, 3 + i), (4 + 2 * i, 3 + i)]))
+            .collect()
+    } else {
+        (0..m).map(|i| (i, i)).collect()
+    };
     let (mut stored_energy, mut dissipated_energy) = (0.0, 0.0);
     let mut k = vec![0.0; d.tangent_operator_size];
     // MTest scales the multipliers by the largest term of the first tangent
@@ -245,7 +301,7 @@ pub fn run(
         let (external0, external1) = (values(&external, t), values(&external, target));
         // No prediction: the iterations start from the previous state.
         let mut u1 = u0.clone();
-        let mut stress1 = vec![0.0; n];
+        let mut stress1 = vec![0.0; m];
         let mut isv1 = isv0.clone();
         let mut iterations = 0;
         let outcome = loop {
@@ -288,11 +344,11 @@ pub fn run(
             // stresses and the multipliers, then the gaps to the imposed
             // strains.
             let mut system = vec![0.0; unknowns * unknowns];
-            for i in 0..n {
-                system[unknowns * i..unknowns * i + n].copy_from_slice(&k[n * i..n * (i + 1)]);
-            }
             let mut residual = vec![0.0; unknowns];
-            residual[..n].copy_from_slice(&stress1);
+            for &(row, s) in &stress_rows {
+                system[unknowns * row..unknowns * row + n].copy_from_slice(&k[n * s..n * (s + 1)]);
+                residual[row] = stress1[s];
+            }
             let mut multiplier = n;
             for &(kind, c, evolution) in &constraints {
                 match kind {

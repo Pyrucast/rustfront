@@ -1,0 +1,16 @@
+// Uniaxial tension of the Saint Venant-Kirchhoff test behaviour in finite
+// strain: FXX is stretched to 1.2, the off-diagonal components are held to
+// zero, FYY and FZZ are free (zero Cauchy stress).
+@OutputFilePrecision 14;
+@Behaviour<generic> 'src/libBehaviour.so' 'SaintVenantKirchhoff';
+@MaterialProperty<constant> 'YoungModulus' 200e9;
+@MaterialProperty<constant> 'PoissonRatio' 0.3;
+@ExternalStateVariable 'Temperature' 293.15;
+@ImposedDeformationGradient 'FXX' {0:1, 1:1.2};
+@ImposedDeformationGradient 'FXY' 0;
+@ImposedDeformationGradient 'FYX' 0;
+@ImposedDeformationGradient 'FXZ' 0;
+@ImposedDeformationGradient 'FZX' 0;
+@ImposedDeformationGradient 'FYZ' 0;
+@ImposedDeformationGradient 'FZY' 0;
+@Times {0, 1 in 10};
