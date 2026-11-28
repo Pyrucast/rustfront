@@ -11,8 +11,10 @@
 /// A function of one variable.
 type Function = fn(f64) -> f64;
 
-/// The functions an expression may call.
-const FUNCTIONS: [(&str, Function); 15] = [
+/// The functions an expression may call: those of MTest's evaluator that
+/// Rust's standard library provides, and `H`, the Heaviside step (1 from 0
+/// on).
+const FUNCTIONS: [(&str, Function); 24] = [
     ("sin", f64::sin),
     ("cos", f64::cos),
     ("tan", f64::tan),
@@ -28,6 +30,15 @@ const FUNCTIONS: [(&str, Function); 15] = [
     ("log10", f64::log10),
     ("sqrt", f64::sqrt),
     ("abs", f64::abs),
+    ("exp2", f64::exp2),
+    ("expm1", f64::exp_m1),
+    ("cbrt", f64::cbrt),
+    ("log2", f64::log2),
+    ("log1p", f64::ln_1p),
+    ("acosh", f64::acosh),
+    ("asinh", f64::asinh),
+    ("atanh", f64::atanh),
+    ("H", |x| if x < 0.0 { 0.0 } else { 1.0 }),
 ];
 
 /// A binary operator.

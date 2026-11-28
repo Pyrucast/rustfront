@@ -51,6 +51,11 @@ pub struct Test {
     /// tangent_operator : DS_DEGL}` after its name.
     pub stress_measure: StressMeasure,
     pub finite_strain_tangent_operator: FiniteStrainTangentOperator,
+    /// The gradients (`@Strain`, `@DeformationGradient`) and the stress
+    /// (`@Stress`) at the first time: `None` for the state at rest, zero or
+    /// the identity as the behaviour.
+    pub initial_gradients: Option<Vec<f64>>,
+    pub initial_stress: Option<Vec<f64>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -311,6 +316,8 @@ pub fn parse(source: &str) -> Result<Test, String> {
         rotation: None,
         stress_measure: StressMeasure::Cauchy,
         finite_strain_tangent_operator: FiniteStrainTangentOperator::CauchyByDeformationGradient,
+        initial_gradients: None,
+        initial_stress: None,
     };
     // The evolutions declared so far, usable in the expressions: by `@Real`,
     // `@Evolution`, and the material properties and external state
@@ -508,6 +515,28 @@ pub fn parse(source: &str) -> Result<Test, String> {
                 let value = tokens.value(&evolutions)?;
                 evolutions.push((name, Evolution::Number(value)));
             }
+            // The state at the first time, `{v1, v2, …}`, with the older or
+            // more general names.
+            "@Strain"
+            | "@DeformationGradient"
+            | "@Gradient"
+            | "@Stress"
+            | "@ThermodynamicForce" => {
+                tokens.symbol('{')?;
+                let mut values = vec![tokens.value(&evolutions)?];
+                while tokens.next_if(&Token::Symbol(',')) {
+                    values.push(tokens.value(&evolutions)?);
+                }
+                tokens.symbol('}')?;
+                let initial = if matches!(keyword.as_str(), "@Stress" | "@ThermodynamicForce") {
+                    &mut test.initial_stress
+                } else {
+                    &mut test.initial_gradients
+                };
+                if initial.replace(values).is_some() {
+                    return Err(format!("line {line}: the initial values are already given"));
+                }
+            }
             "@Evolution" => {
                 let name = tokens.text()?;
                 let evolution = tokens.evolution(option.as_deref(), &evolutions)?;
@@ -627,7 +656,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
             }
             "@Parameter" | "@IntegerParameter" | "@UnsignedIntegerParameter" => {
                 let name = tokens.text()?;
-                let value = tokens.number()?;
+                let value = tokens.value(&evolutions)?;
                 let value = match keyword.as_str() {
                     "@Parameter" => ParameterValue::Real(value),
                     _ if value.fract() != 0.0 => {

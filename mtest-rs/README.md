@@ -57,6 +57,7 @@ be imposed, usually all six off-diagonal components to zero.
 | `@ImposedDeformationGradient` `[<evolution\|function>]` | components `FXX FYY FZZ FXY FYX FXZ FZX FYZ FZY`, `FRR FZZ FTT FRZ FZR` |
 | `@ImposedDrivingVariable`, `@ImposedGradient`, `@ImposedThermodynamicForce` | the older or more general names of the three above |
 | `@InternalStateVariable` | initial value, `0` or `{…}` |
+| `@Strain`, `@DeformationGradient`, `@Gradient`; `@Stress`, `@ThermodynamicForce` | `{…}`: the gradients and the stress at the first time, at rest otherwise |
 | `@Parameter`, `@IntegerParameter`, `@UnsignedIntegerParameter` | set when loading the behaviour, `b[0]` for an element of an array |
 | `@OutOfBoundsPolicy` | `'None'`, `'Warning'` or `'Strict'` |
 | `@Times` | `{0, 1 in 10, 2}` |
@@ -72,7 +73,8 @@ be imposed, usually all six off-diagonal components to zero.
 An evolution is a constant, a table `{t0:v0, t1:v1, …}` (linear in between,
 constant outside), or with `<function>` an expression of `t`: numbers, `t`,
 the names of evolutions, `+ - * / ^`, parentheses and `sin cos tan asin acos
-atan sinh cosh tanh exp log ln log10 sqrt abs`. The names are those of the
+atan sinh cosh tanh asinh acosh atanh exp exp2 expm1 log ln log2 log10 log1p
+sqrt cbrt abs H` (`H` the Heaviside step). The names are those of the
 `@Real`, `@Evolution`, material properties and external state variables of
 the whole file, as in MTest. A value (a time, a component of a table, an
 initial value) may be a quoted expression of the constant evolutions

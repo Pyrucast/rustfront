@@ -270,11 +270,27 @@ pub fn run(
     // The unknowns at the beginning of the step: strains, then multipliers.
     // A deformation gradient starts from the identity: its first three
     // components are diagonal.
+    // The state at the first time: at rest, or as the test gives it.
     let mut u0 = vec![0.0; unknowns];
     if finite_strain {
         u0[..3].fill(1.0);
     }
     let mut stress0 = vec![0.0; m];
+    for (initial, values, what) in [
+        (&test.initial_gradients, &mut u0[..n], "gradients"),
+        (&test.initial_stress, &mut stress0[..], "stress"),
+    ] {
+        if let Some(initial) = initial {
+            if initial.len() != values.len() {
+                return Err(format!(
+                    "the initial {what} has {} values, {} expected",
+                    initial.len(),
+                    values.len()
+                ));
+            }
+            values.copy_from_slice(initial);
+        }
+    }
     // Where each stress component goes in the residual, as MTest assembles
     // it: in its own row for a small strain behaviour; for a finite strain
     // one, the diagonal in the rows of the diagonal of F, and each shear in
