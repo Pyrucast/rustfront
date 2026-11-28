@@ -7,35 +7,8 @@ use rustfront::{
 
 use crate::expression::Expression;
 
-/// How a value evolves with time.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Evolution {
-    /// The same value at all times.
-    Constant(f64),
-    /// Linear between the `(time, value)` points, sorted by time, and
-    /// constant before the first one and after the last one.
-    Table(Vec<(f64, f64)>),
-    /// An expression of the time.
-    Function(Expression),
-}
-
-impl Evolution {
-    /// The value at the time `t`.
-    pub fn value(&self, t: f64) -> f64 {
-        match self {
-            Evolution::Constant(value) => *value,
-            Evolution::Table(points) => match points.iter().position(|(time, _)| *time > t) {
-                Some(0) => points[0].1,
-                None => points[points.len() - 1].1,
-                Some(i) => {
-                    let ((t0, v0), (t1, v1)) = (points[i - 1], points[i]);
-                    v0 + (v1 - v0) * (t - t0) / (t1 - t0)
-                }
-            },
-            Evolution::Function(expression) => expression.value(t),
-        }
-    }
-}
+/// An evolution: a constant (`Number`), a table or a function of the time.
+pub type Evolution = Expression;
 
 /// What a loading imposes on a component.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,45 +122,41 @@ impl Tokens {
     }
 
     /// A value: a number, or as MTest reads it a quoted expression of the
-    /// constants (`@Real`, and the material properties and external state
-    /// variables given a constant value).
-    fn value(&mut self, constants: &[(String, f64)]) -> Result<f64, String> {
+    /// evolutions declared before, which must be constant.
+    fn value(&mut self, evolutions: &[(String, Evolution)]) -> Result<f64, String> {
         match self.next()? {
             (Token::Number(value), _) => Ok(value),
-            (Token::Text(text), line) => Ok(Expression::parse(&text, constants)
+            (Token::Text(text), line) => Expression::parse(&text)
+                .and_then(|e| e.resolve(evolutions))
                 .map_err(|e| format!("line {line}: {e}"))?
-                .value(0.0)),
+                .constant()
+                .ok_or_else(|| format!("line {line}: `{text}` is not a constant")),
             (token, line) => Err(format!("line {line}: expected a value, found {token:?}")),
         }
     }
 
     /// A value, a table `{t:v, …}` of values, or with the `function` option
-    /// an expression of `t`.
+    /// an expression of `t` and of the evolutions declared before.
     fn evolution(
         &mut self,
         option: Option<&str>,
-        constants: &[(String, f64)],
+        evolutions: &[(String, Evolution)],
     ) -> Result<Evolution, String> {
         match (option, self.next()?) {
-            (Some("function"), (Token::Text(text), line)) => Expression::parse(&text, constants)
-                .map(Evolution::Function)
-                .map_err(|e| format!("line {line}: {e}")),
-            (None | Some("evolution" | "constant"), (Token::Number(value), _)) => {
-                Ok(Evolution::Constant(value))
+            (Some("function"), (Token::Text(text), line)) => {
+                Expression::parse(&text).map_err(|e| format!("line {line}: {e}"))
             }
-            (None | Some("evolution" | "constant"), (Token::Text(text), line)) => {
-                Ok(Evolution::Constant(
-                    Expression::parse(&text, constants)
-                        .map_err(|e| format!("line {line}: {e}"))?
-                        .value(0.0),
-                ))
+            (None | Some("evolution" | "constant"), (Token::Number(_) | Token::Text(_), _)) => {
+                // Read again, as a value.
+                self.position -= 1;
+                Ok(Evolution::Number(self.value(evolutions)?))
             }
             (None | Some("evolution"), (Token::Symbol('{'), line)) => {
                 let mut points: Vec<(f64, f64)> = Vec::new();
                 loop {
-                    let t = self.value(constants)?;
+                    let t = self.value(evolutions)?;
                     self.symbol(':')?;
-                    let value = self.value(constants)?;
+                    let value = self.value(evolutions)?;
                     if points.last().is_some_and(|(last, _)| *last >= t) {
                         return Err(format!(
                             "line {line}: the times of an evolution must increase"
@@ -343,8 +312,10 @@ pub fn parse(source: &str) -> Result<Test, String> {
         stress_measure: StressMeasure::Cauchy,
         finite_strain_tangent_operator: FiniteStrainTangentOperator::CauchyByDeformationGradient,
     };
-    // The values declared by `@Real`, usable in the expressions.
-    let mut constants: Vec<(String, f64)> = Vec::new();
+    // The evolutions declared so far, usable in the expressions: by `@Real`,
+    // `@Evolution`, and the material properties and external state
+    // variables, as in MTest.
+    let mut evolutions: Vec<(String, Evolution)> = Vec::new();
     while tokens.position < tokens.list.len() {
         let (keyword, line) = match tokens.next()? {
             (Token::Keyword(keyword), line) => (keyword, line),
@@ -378,6 +349,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
             "@ImposedThermodynamicForce",
             "@RotationMatrix",
             "@Test",
+            "@Evolution",
         ];
         if option.is_some() && !with_option.contains(&keyword.as_str()) {
             return Err(format!("line {line}: `{keyword}` takes no option"));
@@ -468,12 +440,8 @@ pub fn parse(source: &str) -> Result<Test, String> {
             }
             "@MaterialProperty" | "@ExternalStateVariable" => {
                 let name = tokens.text()?;
-                let evolution = tokens.evolution(option.as_deref(), &constants)?;
-                // A constant value may be used in the expressions after it,
-                // as in MTest.
-                if let Evolution::Constant(value) = evolution {
-                    constants.push((name.clone(), value));
-                }
+                let evolution = tokens.evolution(option.as_deref(), &evolutions)?;
+                evolutions.push((name.clone(), evolution.clone()));
                 if keyword == "@MaterialProperty" {
                     test.material_properties.push((name, evolution));
                 } else {
@@ -488,7 +456,7 @@ pub fn parse(source: &str) -> Result<Test, String> {
             | "@ImposedGradient"
             | "@ImposedThermodynamicForce" => {
                 let component = tokens.text()?;
-                let evolution = tokens.evolution(option.as_deref(), &constants)?;
+                let evolution = tokens.evolution(option.as_deref(), &evolutions)?;
                 // The gradient (strain or deformation gradient), or the
                 // stress (the Cauchy stress for a finite strain behaviour).
                 let imposed =
@@ -504,23 +472,23 @@ pub fn parse(source: &str) -> Result<Test, String> {
                 let mut values = Vec::new();
                 if tokens.next_if(&Token::Symbol('{')) {
                     loop {
-                        values.push(tokens.number()?);
+                        values.push(tokens.value(&evolutions)?);
                         if !tokens.next_if(&Token::Symbol(',')) {
                             break;
                         }
                     }
                     tokens.symbol('}')?;
                 } else {
-                    values.push(tokens.number()?);
+                    values.push(tokens.value(&evolutions)?);
                 }
                 test.internal_state_variables.push((name, values));
             }
             "@Times" => {
                 // `{t0, t1 in n, t2}`: `in n` splits an interval in n steps.
                 tokens.symbol('{')?;
-                test.times = vec![tokens.number()?];
+                test.times = vec![tokens.value(&evolutions)?];
                 while tokens.next_if(&Token::Symbol(',')) {
-                    let t = tokens.number()?;
+                    let t = tokens.value(&evolutions)?;
                     let steps = if tokens.next_if(&Token::Word("in".to_owned())) {
                         count(&mut tokens)?
                     } else {
@@ -537,8 +505,13 @@ pub fn parse(source: &str) -> Result<Test, String> {
             }
             "@Real" => {
                 let name = tokens.text()?;
-                let value = tokens.value(&constants)?;
-                constants.push((name, value));
+                let value = tokens.value(&evolutions)?;
+                evolutions.push((name, Evolution::Number(value)));
+            }
+            "@Evolution" => {
+                let name = tokens.text()?;
+                let evolution = tokens.evolution(option.as_deref(), &evolutions)?;
+                evolutions.push((name, evolution));
             }
             "@RotationMatrix" => {
                 if test.rotation.is_some() {
@@ -549,10 +522,10 @@ pub fn parse(source: &str) -> Result<Test, String> {
                 // `{v1, v2, …}`: `n` values.
                 let list = |tokens: &mut Tokens, n: usize| -> Result<Vec<f64>, String> {
                     tokens.symbol('{')?;
-                    let mut values = vec![tokens.value(&constants)?];
+                    let mut values = vec![tokens.value(&evolutions)?];
                     for _ in 1..n {
                         tokens.symbol(',')?;
-                        values.push(tokens.value(&constants)?);
+                        values.push(tokens.value(&evolutions)?);
                     }
                     tokens.symbol('}')?;
                     Ok(values)
@@ -722,6 +695,22 @@ pub fn parse(source: &str) -> Result<Test, String> {
     if test.times.len() < 2 {
         return Err("`@Times` must give at least two times".to_owned());
     }
+    // The names in the functions are those of the whole file.
+    let named = test
+        .material_properties
+        .iter_mut()
+        .chain(&mut test.external_state_variables)
+        .map(|(name, evolution)| (&*name, evolution))
+        .chain(
+            test.imposed
+                .iter_mut()
+                .map(|(_, component, evolution)| (&*component, evolution)),
+        );
+    for (name, evolution) in named {
+        *evolution = evolution
+            .resolve(&evolutions)
+            .map_err(|e| format!("`{name}`: {e}"))?;
+    }
     Ok(test)
 }
 
@@ -771,7 +760,7 @@ mod tests {
         let (kind, component, exx) = &test.imposed[0];
         assert_eq!((*kind, component.as_str()), (Imposed::Strain, "EXX"));
         assert!((exx.value(0.5) - 1e-3).abs() < 1e-18);
-        assert_eq!(test.imposed[1].2, Evolution::Constant(-1e6));
+        assert_eq!(test.imposed[1].2, Evolution::Number(-1e6));
         assert_eq!(test.internal_state_variables[0].1, [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(
             test.parameters,
@@ -799,7 +788,9 @@ mod tests {
             ("@Behaviour<generic> 'lib' 'b';\n@Foo 1;\n", "line 2: unknown or unsupported keyword `@Foo`"),
             ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 1 in 0};\n", "line 2: `@Times` expects a positive integer"),
             ("@Behaviour<generic> 'lib' 'b';\n\n@Times {1, 0};\n", "line 3: the times must increase"),
-            ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 1};\n@ImposedStrain<function> 'EXX' 'x*t';\n", "line 3: unknown variable `x`"),
+            // Names are resolved once the whole file is read, as in MTest.
+            ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 1};\n@ImposedStrain<function> 'EXX' 'x*t';\n", "`EXX`: unknown variable `x`"),
+            ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 'x'};\n", "line 2: unknown variable `x`"),
             ("@Behaviour<generic> 'lib' 'b';\n@Times {0, 1}\n", "line 2: unexpected end of file"),
             ("@Times {0, 1};\n", "no `@Behaviour` declared"),
             ("@Behaviour<generic> 'lib' 'b';\n@UnsignedIntegerParameter 'iterMax' 1.5;\n", "line 2: `@UnsignedIntegerParameter` expects an integer"),

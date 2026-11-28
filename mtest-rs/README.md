@@ -61,6 +61,7 @@ be imposed, usually all six off-diagonal components to zero.
 | `@OutOfBoundsPolicy` | `'None'`, `'Warning'` or `'Strict'` |
 | `@Times` | `{0, 1 in 10, 2}` |
 | `@Real` | a value or an expression, usable in functions |
+| `@Evolution[<evolution\|function>]` | a named evolution, usable in functions |
 | `@RotationMatrix[<Standard\|Euler\|Miller\|Direction>]` | the material frame of an orthotropic behaviour: `{{…}, {…}, {…}}` by rows, `{ψ, θ, φ}`, `{h, k, l}`, or `{x, y}` in 2D and `{{…}, {…}}` in 3D; values or expressions of `@Real` constants |
 | `@OutputFile`, `@OutputFilePrecision` | 6 digits by default |
 | `@StrainEpsilon`, `@StressEpsilon` | `1e-12` and `1e-3` by default; also `@DeformationGradientEpsilon`, `@DrivingVariableEpsilon`, `@GradientEpsilon`, `@ThermodynamicForceEpsilon` |
@@ -70,10 +71,12 @@ be imposed, usually all six off-diagonal components to zero.
 
 An evolution is a constant, a table `{t0:v0, t1:v1, …}` (linear in between,
 constant outside), or with `<function>` an expression of `t`: numbers, `t`,
-`@Real` constants, `+ - * / ^`, parentheses and `sin cos tan asin acos atan
-sinh cosh tanh exp log ln log10 sqrt abs`. A value may be a quoted expression
-of the constants: the `@Real` ones, and the material properties and external
-state variables given a constant value before it.
+the names of evolutions, `+ - * / ^`, parentheses and `sin cos tan asin acos
+atan sinh cosh tanh exp log ln log10 sqrt abs`. The names are those of the
+`@Real`, `@Evolution`, material properties and external state variables of
+the whole file, as in MTest. A value (a time, a component of a table, an
+initial value) may be a quoted expression of the constant evolutions
+declared before it.
 
 ## Differences with MTest
 

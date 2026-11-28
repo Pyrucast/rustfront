@@ -205,7 +205,7 @@ pub fn run(
     // The constraints, in MTest's order: those of the file, then those the
     // hypothesis adds. Each imposed strain has a Lagrange multiplier, stored
     // after the strain components among the unknowns.
-    let zero = Evolution::Constant(0.0);
+    let zero = Evolution::Number(0.0);
     let mut constraints: Vec<(Imposed, usize, &Evolution)> = Vec::new();
     // The components: `EXX`… or `FXX`…, and `SXX`…
     let gradient = if finite_strain {
@@ -253,7 +253,7 @@ pub fn run(
             ));
         }
     }
-    let rest = Evolution::Constant(if finite_strain { 1.0 } else { 0.0 });
+    let rest = Evolution::Number(if finite_strain { 1.0 } else { 0.0 });
     constraints.extend(added.iter().map(|&(kind, i)| {
         let value = match kind {
             Imposed::Strain => &rest,

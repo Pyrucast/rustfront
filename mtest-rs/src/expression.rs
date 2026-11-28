@@ -1,9 +1,12 @@
 //! Expressions of the time `t`, as given to the `<function>` evolutions:
-//! `'1.e-3*t'`, `'s0*sin(t/900.)'`.
+//! `'1.e-3*t'`, `'s0*sin(t/900.)'`, and the evolutions themselves.
 //!
-//! Numbers, `t`, the constants declared by `@Real`, the operators `+ - * /`
-//! and `^` (or `**`) for the power, parentheses, and the functions of
-//! [`FUNCTIONS`]. The constants are replaced by their values when parsing.
+//! Numbers, `t`, the names of evolutions (declared by `@Real`, `@Evolution`,
+//! and the material properties and external state variables), the operators
+//! `+ - * /` and `^` (or `**`) for the power, parentheses, and the functions
+//! of [`FUNCTIONS`]. As in MTest, the names are those of the whole file: they
+//! are replaced by their evolutions once it is read, by
+//! [`Expression::resolve`].
 
 /// A function of one variable.
 type Function = fn(f64) -> f64;
@@ -42,6 +45,11 @@ pub enum Operator {
 pub enum Expression {
     Number(f64),
     Time,
+    /// Linear between the `(time, value)` points, sorted by time, and
+    /// constant before the first one and after the last one.
+    Table(Vec<(f64, f64)>),
+    /// The name of an evolution, not resolved yet: not a number.
+    Variable(String),
     Negate(Box<Expression>),
     Binary(Operator, Box<Expression>, Box<Expression>),
     /// A call to the function of index `0` in [`FUNCTIONS`]: an index rather
@@ -57,13 +65,12 @@ enum Token {
 }
 
 /// The tokens of an expression and the position of the next one to read.
-struct Parser<'a> {
+struct Parser {
     tokens: Vec<Token>,
     position: usize,
-    constants: &'a [(String, f64)],
 }
 
-impl Parser<'_> {
+impl Parser {
     /// Parses an operand followed by the binary operators whose precedence is
     /// at least `minimum`: precedence climbing, `^` being right associative
     /// and binding tighter than the unary minus (`-t^2` is `-(t^2)`).
@@ -94,15 +101,7 @@ impl Parser<'_> {
                 Expression::Call(function, Box::new(self.expression(5)?))
             }
             Some(Token::Name(name)) if name == "t" => Expression::Time,
-            Some(Token::Name(name)) => {
-                let value = self
-                    .constants
-                    .iter()
-                    .find(|(n, _)| *n == name)
-                    .ok_or_else(|| format!("unknown variable `{name}`"))?
-                    .1;
-                Expression::Number(value)
-            }
+            Some(Token::Name(name)) => Expression::Variable(name),
             Some(Token::Symbol(c)) => return Err(format!("unexpected `{c}`")),
             None => return Err("unexpected end of expression".to_owned()),
         };
@@ -134,8 +133,8 @@ impl Parser<'_> {
 }
 
 impl Expression {
-    /// Parses `text`, replacing the names of `constants` by their values.
-    pub fn parse(text: &str, constants: &[(String, f64)]) -> Result<Expression, String> {
+    /// Parses `text`, its names left to [`Expression::resolve`].
+    pub fn parse(text: &str) -> Result<Expression, String> {
         let chars: Vec<char> = text.chars().collect();
         let mut tokens = Vec::new();
         let mut i = 0;
@@ -183,7 +182,6 @@ impl Expression {
         let mut parser = Parser {
             tokens,
             position: 0,
-            constants,
         };
         let expression = parser
             .expression(0)
@@ -199,6 +197,14 @@ impl Expression {
         match self {
             Expression::Number(value) => *value,
             Expression::Time => t,
+            Expression::Table(points) => match points.iter().position(|(time, _)| *time > t) {
+                Some(0) => points[0].1,
+                None => points[points.len() - 1].1,
+                Some(i) => {
+                    let ((t0, v0), (t1, v1)) = (points[i - 1], points[i]);
+                    v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+                }
+            },
             Expression::Negate(e) => -e.value(t),
             Expression::Binary(operator, a, b) => {
                 let (a, b) = (a.value(t), b.value(t));
@@ -211,6 +217,49 @@ impl Expression {
                 }
             }
             Expression::Call(function, e) => FUNCTIONS[*function].1(e.value(t)),
+            Expression::Variable(_) => f64::NAN,
+        }
+    }
+
+    /// The expression, its names replaced by the `evolutions` of these names
+    /// (the last one declared), themselves resolved.
+    pub fn resolve(&self, evolutions: &[(String, Expression)]) -> Result<Expression, String> {
+        fn resolve(
+            e: &Expression,
+            evolutions: &[(String, Expression)],
+            depth: usize,
+        ) -> Result<Expression, String> {
+            if depth > 64 {
+                return Err("evolutions defined from one another".to_owned());
+            }
+            let boxed = |a| resolve(a, evolutions, depth).map(Box::new);
+            Ok(match e {
+                Expression::Variable(name) => {
+                    let (_, evolution) = evolutions
+                        .iter()
+                        .rev()
+                        .find(|(n, _)| n == name)
+                        .ok_or_else(|| format!("unknown variable `{name}`"))?;
+                    resolve(evolution, evolutions, depth + 1)?
+                }
+                Expression::Negate(a) => Expression::Negate(boxed(a)?),
+                Expression::Call(function, a) => Expression::Call(*function, boxed(a)?),
+                Expression::Binary(operator, a, b) => {
+                    Expression::Binary(*operator, boxed(a)?, boxed(b)?)
+                }
+                other => other.clone(),
+            })
+        }
+        resolve(self, evolutions, 0)
+    }
+
+    /// The value of the expression when it does not depend on the time.
+    pub fn constant(&self) -> Option<f64> {
+        match self {
+            Expression::Number(value) => Some(*value),
+            Expression::Time | Expression::Table(_) | Expression::Variable(_) => None,
+            Expression::Negate(e) | Expression::Call(_, e) => e.constant().map(|_| self.value(0.0)),
+            Expression::Binary(_, a, b) => a.constant().and(b.constant()).map(|_| self.value(0.0)),
         }
     }
 }
@@ -221,7 +270,7 @@ mod tests {
 
     #[test]
     fn values_follow_the_usual_precedences() {
-        let constants = [("s0".to_owned(), 2.0)];
+        let constants = [("s0".to_owned(), Expression::Number(2.0))];
         for (text, t, expected) in [
             ("1.e-3*t", 2.0, 2e-3),
             ("1+2*3", 0.0, 7.0),
@@ -237,7 +286,10 @@ mod tests {
             ("sin(t)^2+cos(t)^2", 0.7, 1.0),
             ("sqrt(t)*2E2", 4.0, 400.0),
         ] {
-            let e = Expression::parse(text, &constants).unwrap();
+            let e = Expression::parse(text)
+                .unwrap()
+                .resolve(&constants)
+                .unwrap();
             let found = e.value(t);
             assert!(
                 (found - expected).abs() < 1e-12 * expected.abs().max(1.0),
@@ -256,8 +308,37 @@ mod tests {
             ("1 2", "trailing"),
             ("1;", "unexpected `;`"),
         ] {
-            let error = Expression::parse(text, &[]).unwrap_err();
+            let error = Expression::parse(text)
+                .and_then(|e| e.resolve(&[]))
+                .unwrap_err();
             assert!(error.contains(message), "{text}: {error}");
         }
+    }
+
+    #[test]
+    fn names_are_those_of_the_whole_file() {
+        // `b` is declared after `a`, which uses it; a table is evaluated at
+        // the time of the expression that uses it.
+        let evolutions = [
+            ("a".to_owned(), Expression::parse("2*b").unwrap()),
+            (
+                "b".to_owned(),
+                Expression::Table(vec![(0.0, 1.0), (1.0, 3.0)]),
+            ),
+            ("c".to_owned(), Expression::parse("c+1").unwrap()),
+        ];
+        let e = Expression::parse("a+t")
+            .unwrap()
+            .resolve(&evolutions)
+            .unwrap();
+        assert_eq!(e.value(0.5), 4.5);
+        assert_eq!(e.constant(), None);
+        let constant = Expression::parse("2*(1+3)").unwrap();
+        assert_eq!(constant.constant(), Some(8.0));
+        let cycle = Expression::parse("c")
+            .unwrap()
+            .resolve(&evolutions)
+            .unwrap_err();
+        assert!(cycle.contains("one another"), "{cycle}");
     }
 }
